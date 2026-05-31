@@ -1,13 +1,17 @@
 import math
 
 import isaaclab.sim as sim_utils
+import isaaclab.sim.schemas as sim_schemas
 import torch
 
 from isaaclab.assets import AssetBaseCfg, RigidObject, RigidObjectCfg
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
-from isaaclab.sim.schemas import MassPropertiesCfg
+from isaaclab.sim.schemas import CollisionPropertiesCfg, MassPropertiesCfg, RigidBodyPropertiesCfg
+from isaaclab.sim.spawners.from_files import spawn_from_usd
+from isaaclab.sim.utils import clone
 from isaaclab.utils import configclass
+from pxr import PhysxSchema, Usd, UsdGeom, UsdPhysics
 
 from leisaac.utils.general_assets import parse_usd_and_create_subassets
 from simulator import ASSETS_ROOT
@@ -42,6 +46,71 @@ CLOTH_WORLD_ROT: tuple[float, float, float, float] = (
     math.sqrt(0.5),
 )
 CLOTH_FOOTPRINT_SIZE: tuple[float, float] = (0.069, 0.115)
+RIGID_PROPS = RigidBodyPropertiesCfg(
+    disable_gravity=False,
+    max_depenetration_velocity=5.0,
+)
+COLLISION_PROPS = CollisionPropertiesCfg(
+    contact_offset=0.005,
+    rest_offset=0.0,
+)
+
+
+def _ensure_rigid_object_schemas(root_prim: Usd.Prim) -> None:
+    """Apply missing USD physics schemas required by Isaac Lab RigidObject."""
+    if not root_prim.IsValid():
+        raise RuntimeError(f"Cannot apply rigid object schemas to invalid prim: {root_prim}")
+
+    UsdPhysics.RigidBodyAPI.Apply(root_prim)
+    PhysxSchema.PhysxRigidBodyAPI.Apply(root_prim)
+    UsdPhysics.MassAPI.Apply(root_prim)
+
+    collision_count = 0
+    for prim in Usd.PrimRange(root_prim):
+        if prim.IsA(UsdGeom.Mesh):
+            UsdPhysics.CollisionAPI.Apply(prim)
+            PhysxSchema.PhysxCollisionAPI.Apply(prim)
+            mesh_collision = UsdPhysics.MeshCollisionAPI.Apply(prim)
+            mesh_collision.CreateApproximationAttr().Set("convexHull")
+            collision_count += 1
+
+    if collision_count == 0:
+        UsdPhysics.CollisionAPI.Apply(root_prim)
+        PhysxSchema.PhysxCollisionAPI.Apply(root_prim)
+
+
+@clone
+def _spawn_rigid_usd(
+    prim_path: str,
+    cfg: sim_utils.UsdFileCfg,
+    translation: tuple[float, float, float] | None = None,
+    orientation: tuple[float, float, float, float] | None = None,
+    **kwargs,
+) -> Usd.Prim:
+    """Spawn a USD file and make non-physics USDs usable as RigidObject assets."""
+    rigid_props = cfg.rigid_props
+    collision_props = cfg.collision_props
+    mass_props = cfg.mass_props
+
+    cfg.rigid_props = None
+    cfg.collision_props = None
+    cfg.mass_props = None
+    try:
+        root_prim = spawn_from_usd(prim_path, cfg, translation=translation, orientation=orientation, **kwargs)
+    finally:
+        cfg.rigid_props = rigid_props
+        cfg.collision_props = collision_props
+        cfg.mass_props = mass_props
+
+    _ensure_rigid_object_schemas(root_prim)
+
+    if rigid_props is not None:
+        sim_schemas.modify_rigid_body_properties(prim_path, rigid_props)
+    if collision_props is not None:
+        sim_schemas.modify_collision_properties(prim_path, collision_props)
+    if mass_props is not None:
+        sim_schemas.modify_mass_properties(prim_path, mass_props)
+    return root_prim
 
 # UMI/object_poses entries.  Only bowl/spoon are randomized per replay episode;
 # tray, tissue, vase, and cloth are part of the task scene with fixed initial
@@ -92,8 +161,11 @@ class DiningCleanupSceneCfg(SingleArmFrankaTaskSceneCfg):
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
         spawn=sim_utils.UsdFileCfg(
+            func=_spawn_rigid_usd,
             usd_path=str(BOWL_USD_PATH),
             scale=BOWL_SCALE,
+            rigid_props=RIGID_PROPS,
+            collision_props=COLLISION_PROPS,
             mass_props=MassPropertiesCfg(mass=0.10),
         ),
     )
@@ -105,8 +177,11 @@ class DiningCleanupSceneCfg(SingleArmFrankaTaskSceneCfg):
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
         spawn=sim_utils.UsdFileCfg(
+            func=_spawn_rigid_usd,
             usd_path=str(SPOON_USD_PATH),
             scale=SPOON_SCALE,
+            rigid_props=RIGID_PROPS,
+            collision_props=COLLISION_PROPS,
             mass_props=MassPropertiesCfg(mass=0.05),
         ),
     )
@@ -118,8 +193,11 @@ class DiningCleanupSceneCfg(SingleArmFrankaTaskSceneCfg):
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
         spawn=sim_utils.UsdFileCfg(
+            func=_spawn_rigid_usd,
             usd_path=str(TRAY_USD_PATH),
             scale=TRAY_SCALE,
+            rigid_props=RIGID_PROPS,
+            collision_props=COLLISION_PROPS,
             mass_props=MassPropertiesCfg(mass=0.20),
         ),
     )
@@ -131,8 +209,11 @@ class DiningCleanupSceneCfg(SingleArmFrankaTaskSceneCfg):
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
         spawn=sim_utils.UsdFileCfg(
+            func=_spawn_rigid_usd,
             usd_path=str(TISSUE_USD_PATH),
             scale=TISSUE_SCALE,
+            rigid_props=RIGID_PROPS,
+            collision_props=COLLISION_PROPS,
             mass_props=MassPropertiesCfg(mass=0.05),
         ),
     )
@@ -144,8 +225,11 @@ class DiningCleanupSceneCfg(SingleArmFrankaTaskSceneCfg):
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
         spawn=sim_utils.UsdFileCfg(
+            func=_spawn_rigid_usd,
             usd_path=str(VASE_USD_PATH),
             scale=VASE_SCALE,
+            rigid_props=RIGID_PROPS,
+            collision_props=COLLISION_PROPS,
             mass_props=MassPropertiesCfg(mass=0.20),
         ),
     )
@@ -157,8 +241,11 @@ class DiningCleanupSceneCfg(SingleArmFrankaTaskSceneCfg):
             rot=CLOTH_WORLD_ROT,
         ),
         spawn=sim_utils.UsdFileCfg(
+            func=_spawn_rigid_usd,
             usd_path=str(CLOTH_USD_PATH),
             scale=CLOTH_SCALE,
+            rigid_props=RIGID_PROPS,
+            collision_props=COLLISION_PROPS,
             mass_props=MassPropertiesCfg(mass=0.03),
         ),
     )
