@@ -51,7 +51,7 @@ HCIS-DiningCleanup-SingleArm-v0
 ```text
 packages/simulator/assets/scenes/dining_room/objects/
 ```
-
+Google drivve link: https://drive.google.com/drive/folders/1FHOizW83ahsts2zrd36hD3e29t2Z2hLI?usp=drive_link
 本任務使用：
 
 ```text
