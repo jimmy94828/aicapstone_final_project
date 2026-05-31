@@ -1,10 +1,11 @@
 # Dining Cleanup Advanced Project
 
-本文件整理 advanced project 中 `Dining Cleanup` 任務的設計與執行方式，涵蓋三個主要部分：
+本文件整理 advanced project 中 `Dining Cleanup` 任務的設計與執行方式，涵蓋四個主要部分：
 
 1. FSM 軌跡生成
 2. object pose 生成
 3. object pose 與桌面佔據區域視覺化
+4. keyboard teleoperation 檢查與手動錄製
 
 任務目標是將原本的刀叉擺放任務延伸為「用餐完畢後的餐桌收拾與清潔」任務。機器手臂需要先把 bowl 與 spoon 收到 tray，接著拿起 cloth 並擦拭原本 bowl/spoon 所在的左半桌面區域。
 
@@ -15,6 +16,7 @@
 | Gym task 註冊 | `packages/simulator/src/simulator/tasks/dining_cleanup/__init__.py` |
 | task/env/scene config | `packages/simulator/src/simulator/tasks/dining_cleanup/dining_cleanup_env_cfg.py` |
 | FSM | `packages/simulator/src/simulator/datagen/state_machine/dining_cleanup.py` |
+| teleoperation | `scripts/teleop.py` |
 | datagen registry | `scripts/datagen/generate.py` |
 | object pose generator | `scripts/generate_dining_cleanup_object_poses.py` |
 | object pose visualization | `scripts/visualize_dining_cleanup_layout.py` |
@@ -164,8 +166,6 @@ data/dining_clean/dining_cleanup_object_poses_500.json
 在 repo root 執行：
 
 ```bash
-cd /home/weichen/AI_capstone/aicapstone
-
 python3 scripts/generate_dining_cleanup_object_poses.py \
   --count 500 \
   --output data/dining_clean/dining_cleanup_object_poses_500.json
@@ -234,7 +234,7 @@ configured bowl-spoon max distance = 0.280
 可用以下方式確認 object pose 能被 loader 讀取：
 
 ```bash
-PYTHONPATH=/home/weichen/AI_capstone/aicapstone/packages/simulator/src \
+PYTHONPATH=./packages/simulator/src \
 python3 - <<'PY'
 from pathlib import Path
 from simulator.utils.object_poses_loader import ObjectPoseConfig, load_episode_poses
@@ -282,8 +282,6 @@ data/dining_clean/dining_cleanup_layout_xy.png
 ### 產生圖檔
 
 ```bash
-cd /home/weichen/AI_capstone/aicapstone
-
 python3 scripts/visualize_dining_cleanup_layout.py \
   --input data/dining_clean/dining_cleanup_object_poses_500.json \
   --output data/dining_clean/dining_cleanup_layout_xy.png
@@ -560,6 +558,137 @@ y half width = 0.13
 z range = [-0.05, 0.11] relative to tray z
 ```
 
+## Teleoperation 執行方式
+
+teleoperation 適合用來檢查 dining cleanup 場景、手動測試 grasp/wipe 動作，或錄製少量人工示範。執行環境需使用 Isaac Lab 可用的 GPU/Docker 環境。
+
+### 1. 基本啟動
+
+只要切換 task id 即可使用 dining cleanup 任務：
+
+```bash
+python scripts/teleop.py \
+  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --teleop_device keyboard \
+  --num_envs 1 \
+  --device cuda \
+  --enable_cameras
+```
+
+這個指令會載入 `HCIS-DiningCleanup-SingleArm-v0`，也就是 `packages/simulator/src/simulator/tasks/dining_cleanup/dining_cleanup_env_cfg.py` 定義的場景。若沒有提供 `--object_poses`，bowl/spoon 會使用 env config 內的預設初始位置；tray、tissue、vase、cloth 則固定在 env config 中定義的位置。
+
+`--enable_cameras` 會啟用 `wrist` 與 `front` camera observation。若只是快速檢查 robot motion，可以省略；若要錄製可訓練的 LeRobot dataset，建議保留。
+
+### 2. 使用 dining cleanup object poses
+
+若要使用目前預設的 500 筆 bowl/spoon 初始位置，加入 `--object_poses`：
+
+```bash
+python scripts/teleop.py \
+  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --teleop_device keyboard \
+  --num_envs 1 \
+  --device cuda \
+  --enable_cameras \
+  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json
+```
+
+`object_poses` 只會更新 bowl/spoon；tray、tissue、vase、cloth 維持固定場景配置。`scripts/teleop.py` 會載入 JSON 中 `status == "full"` 的 entries，第一次 reset 後套用第 1 筆 episode pose，之後每次按 `R` 或 `N` reset 時會前進到下一筆 episode pose。
+
+### 3. Keyboard 控制
+
+end-effector delta 以 `panda_hand` frame 表示，teleop script 會使用 Franka keyboard controller 將操作轉成 joint target 與 gripper command。
+
+| Key | 功能 |
+|-----|------|
+| `W` / `S` | +x / -x 平移 |
+| `A` / `D` | +y / -y 平移 |
+| `J` / `K` | +z / -z 平移 |
+| `H` / `L` | roll- / roll+ |
+| `U` / `I` | pitch- / pitch+ |
+| `Q` / `E` | yaw- / yaw+ |
+| `C` | 打開 gripper |
+| `M` | 關閉 gripper |
+| `R` | reset environment；若有 `--object_poses`，切到下一筆 episode pose |
+| `N` | 標記目前 episode 成功並 reset；錄製時會存成 successful demo |
+
+可用 `--sensitivity` 調整平移與旋轉步長。例如 bowl edge grasp 或 cloth wipe 需要更細緻操作時，可降低 sensitivity：
+
+```bash
+python scripts/teleop.py \
+  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --teleop_device keyboard \
+  --num_envs 1 \
+  --device cuda \
+  --enable_cameras \
+  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
+  --sensitivity 0.5
+```
+
+### 4. 錄製 HDF5 demonstrations
+
+若要錄製 HDF5 demonstrations，加入 `--record` 與 `--dataset_file`：
+
+```bash
+python scripts/teleop.py \
+  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --teleop_device keyboard \
+  --num_envs 1 \
+  --device cuda \
+  --enable_cameras \
+  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
+  --record \
+  --dataset_file ./datasets/dining_cleanup_teleop.hdf5 \
+  --num_demos 10
+```
+
+錄製流程：
+
+1. 啟動後開始操作 robot；第一次送出 action 時會開始 recording。
+2. 完成任務後按 `N`，將 episode 標記為 success 並 reset。
+3. 若 episode 失敗或想重來，按 `R` reset；這次 episode 不會被標成 success。
+4. 若有設定 `--object_poses`，每次 `R` 或 `N` reset 後會套用下一筆 pose。
+5. `--num_demos 10` 代表錄到 10 筆 successful demos 後自動結束；若設為 `0`，可用 Ctrl+C 手動停止並 finalize dataset。
+
+若輸出檔案已存在，請改新的 `--dataset_file`，或加入 `--resume` 續錄到既有檔案。
+
+### 5. 錄製 LeRobot dataset
+
+若要直接輸出 LeRobot dataset，加入 `--use_lerobot_recorder`、`--lerobot_dataset_repo_id` 與 FPS：
+
+```bash
+python scripts/teleop.py \
+  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --teleop_device keyboard \
+  --num_envs 1 \
+  --device cuda \
+  --enable_cameras \
+  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
+  --record \
+  --use_lerobot_recorder \
+  --lerobot_dataset_repo_id ${HF_USER}/dining-cleanup-teleop \
+  --lerobot_dataset_fps 30 \
+  --dataset_file ./datasets/dining_cleanup_teleop.hdf5 \
+  --num_demos 10
+```
+
+`--lerobot_dataset_repo_id` 會決定本地 LeRobot dataset 目錄名稱與後續上傳 Hugging Face Hub 時的 repo id。錄製完成後若要上傳，可再使用：
+
+```bash
+hf upload ${HF_USER}/dining-cleanup-teleop --repo-type dataset
+```
+
+### 6. Success 判定注意事項
+
+`scripts/teleop.py` 在手動 teleoperation 模式會關閉 env 原本的 automatic `success` termination，避免操作過程中自動 reset。因此 teleop 錄製時的成功與否不是由 `dining_cleanup_success(...)` 自動判定，而是由操作者按鍵決定：
+
+```text
+N = successful episode
+R = reset/discard current episode
+```
+
+這和 `scripts/datagen/generate.py` 不同；datagen 會在 FSM episode 結束後呼叫 `DiningCleanupStateMachine.check_success(env)`，再決定是否輸出 successful demo。
+
 ## Datagen 執行方式
 
 ### 1. 產生 object poses
@@ -650,6 +779,7 @@ python3 -m py_compile \
   packages/simulator/src/simulator/datagen/state_machine/dining_cleanup.py \
   scripts/generate_dining_cleanup_object_poses.py \
   scripts/visualize_dining_cleanup_layout.py \
+  scripts/teleop.py \
   scripts/datagen/generate.py
 ```
 
@@ -697,7 +827,8 @@ python3 -m py_compile \
   packages/simulator/src/simulator/tasks/dining_cleanup/dining_cleanup_env_cfg.py \
   packages/simulator/src/simulator/datagen/state_machine/dining_cleanup.py \
   scripts/generate_dining_cleanup_object_poses.py \
-  scripts/visualize_dining_cleanup_layout.py
+  scripts/visualize_dining_cleanup_layout.py \
+  scripts/teleop.py
 
 # 2. 重新產生 poses
 python3 scripts/generate_dining_cleanup_object_poses.py \
@@ -709,7 +840,16 @@ python3 scripts/visualize_dining_cleanup_layout.py \
   --input data/dining_clean/dining_cleanup_object_poses_500.json \
   --output data/dining_clean/dining_cleanup_layout_xy.png
 
-# 4. 在 Isaac Lab GPU 環境跑 datagen
+# 4. 可選：在 Isaac Lab GPU 環境跑 keyboard teleoperation 檢查場景
+python scripts/teleop.py \
+  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --teleop_device keyboard \
+  --num_envs 1 \
+  --device cuda \
+  --enable_cameras \
+  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json
+
+# 5. 在 Isaac Lab GPU 環境跑 datagen
 python scripts/datagen/generate.py \
   --task HCIS-DiningCleanup-SingleArm-v0 \
   --num_envs 1 \

@@ -36,25 +36,19 @@ _FRANKA_ARM_JOINT_NAMES = (
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
 
-_MAX_CARTESIAN_DELTA = 0.018
+_MAX_CARTESIAN_DELTA = 0.022
 _MAX_ROT_DELTA = 0.08
 _IK_DLS_LAMBDA = 0.01
 
-_HOVER_Z_OFFSET = 0.15
+_HOVER_Z_OFFSET = 0.20
 _GRASP_Z_OFFSET = 0.08
-_LIFT_Z_OFFSET = 0.2
-_RELEASE_Z_OFFSET = 0.09
+_LIFT_Z_OFFSET = 0.20
+_RELEASE_Z_OFFSET = 0.10
+_RELEASE_TOL_M = 0.015
 _GRIPPER_DOWN_ROLL_W = math.pi
 _GRIPPER_DOWN_PITCH_W = 0.0
 _GRIPPER_DOWN_YAW_OFFSET_RANGE = (-0.15, 0.15)
-# Grasp yaw bias (rad) on top of the object's world yaw, before the random
-# jitter. Cutlery items are elongated, so π/2 closes the fingers across the
-# short axis. Per-USD orientation correction lives in env_cfg's
-# ``per_object_yaw_offset``.
 _GRASP_YAW_OFFSET: float = math.pi / 2.0
-# Horizontal retreat (m) toward the robot base applied to approach + grasp
-# targets. Per-object so each cutlery item can be tuned independently
-# (e.g. knife may grab better with no retreat than fork).
 _GRASP_RETREAT_PER_OBJECT: dict[str, float] = {
     "fork": 0.025,
     "knife": 0.025,
@@ -76,12 +70,30 @@ _FRANKA_REST_JOINT_POS = {
     "panda_finger_joint2": 0.04,
 }
 
-# Pick order: fork first (place on +y / left of plate), then knife (place on -y / right)
 _PICK_ORDER = (_KNIFE_NAME, _FORK_NAME)
-_PLACE_X_SIGNS = (+1.0, -1.0)  # fork → +x of plate, knife → -x of plate
+_PLACE_X_SIGNS = (-1.0, +1.0)  # knife → -x of plate, fork → +x of plate
 
-_PHASE_DURATIONS_PER_OBJECT = (180, 130, 20, 160, 170, 15, 30)
+_PHASE_DURATIONS_PER_OBJECT = (180, 130, 20, 80, 170, 15, 50)
 _PHASES_PER_OBJECT = len(_PHASE_DURATIONS_PER_OBJECT)
+
+# ---------------------------------------------------------------------------
+# DART noise configuration
+# ---------------------------------------------------------------------------
+# Per-phase target-position noise sigma (metres). Index = phase_in_cycle.
+# Design rationale:
+#   - Phase 0 (hover) / Phase 4 (above place): large xy noise to generate
+#     lateral recovery demos. z noise is smaller to avoid ceiling clips.
+#   - Phase 1 (approach): moderate xy, tiny z — approach height is critical.
+#   - Phase 2 (grasp): very small — too much noise here causes empty grasps.
+#   - Phase 3 (lift): no xy noise (we already lock xy via _lift_start_ee_xy_w);
+#     small z so the lift height demo has some variation.
+#   - Phase 5 (lower to release): tiny — release height is sensitive.
+#   - Phase 6 (retreat): negligible — success already achieved.
+#
+# Noise is sampled ONCE per phase, then linearly decayed to 0 over the phase.
+# This produces a "drift-then-correct" shape rather than random jitter.
+_DART_SIGMA_XY = (0.1, 0.01, 0.003, 0.000, 0.1, 0.003, 0.002)
+_DART_SIGMA_Z  = (0.01, 0.01, 0.002, 0.005, 0.01, 0.002, 0.001)
 
 
 def _constant_gripper(num_envs: int, device: torch.device, value: float) -> torch.Tensor:
@@ -103,7 +115,6 @@ def _retreat_xy_toward(
     anchor_pos_w: torch.Tensor,
     distance: float,
 ) -> torch.Tensor:
-    """Pull ``target_pos_w`` xy toward ``anchor_pos_w`` by ``distance`` metres."""
     out = target_pos_w.clone()
     delta_xy = out[:, :2] - anchor_pos_w[:, :2]
     norm = torch.linalg.norm(delta_xy, dim=-1, keepdim=True).clamp_min(1e-6)
@@ -112,7 +123,6 @@ def _retreat_xy_toward(
 
 
 def _yaw_from_quat_wxyz(quat_wxyz: torch.Tensor) -> torch.Tensor:
-    """Yaw (rotation about world z) from a (w, x, y, z) quaternion."""
     w, x, y, z = quat_wxyz[:, 0], quat_wxyz[:, 1], quat_wxyz[:, 2], quat_wxyz[:, 3]
     siny_cosp = 2.0 * (w * z + x * y)
     cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
@@ -140,8 +150,8 @@ def _find_body_index(robot, body_name: str) -> int:
 class CutleryArrangementStateMachine(StateMachineBase):
     """Scripted Franka policy for arranging cutlery around a plate.
 
-    Picks up the fork and places it on the +y (left) side of the plate,
-    then picks up the knife and places it on the -y (right) side.
+    Picks up the knife and places it on the -x (right) side of the plate,
+    then picks up the fork and places it on the +x (left) side.
 
     Each object goes through 7 phases:
 
@@ -152,6 +162,10 @@ class CutleryArrangementStateMachine(StateMachineBase):
     4. Move above target position (beside plate)
     5. Lower and release
     6. Retreat upward
+
+    DART noise: each phase samples a fixed offset for (x, y, z) that decays
+    linearly to zero over the phase duration. This produces "drift-then-correct"
+    recovery trajectories that reduce covariate shift at training time.
 
     The action vector is ``[panda_joint1, ..., panda_joint7, gripper]``.
     """
@@ -167,12 +181,21 @@ class CutleryArrangementStateMachine(StateMachineBase):
         self._jacobi_joint_ids: list[int] = []
         self._rest_joint_pos: torch.Tensor | None = None
         self._rest_ee_pos_w: torch.Tensor | None = None
+
+        # FIX: _initial_ee_pos_w is now captured at the start of every phase-0
+        # (hover phase), not just at global step 0. This ensures the lerp works
+        # correctly for both the knife pick (event 0) and the fork pick (event 7).
         self._initial_ee_pos_w: torch.Tensor | None = None
+
         self._gripper_down_yaw_w: torch.Tensor | None = None
         self._gripper_down_yaw_offset_w: torch.Tensor | None = None
         self._current_object_idx: int = 0
         self._event: int = 0
         self._events_dt: list[int] = list(_PHASE_DURATIONS_PER_OBJECT) * len(_PICK_ORDER)
+        self._lift_start_ee_xy_w: torch.Tensor | None = None
+
+        # DART: per-phase fixed noise offset (num_envs, 3), sampled at phase start
+        self._dart_noise_w: torch.Tensor | None = None
 
     # ------------------------------------------------------------------
     # StateMachineBase interface
@@ -221,8 +244,19 @@ class CutleryArrangementStateMachine(StateMachineBase):
 
         done = torch.logical_and(done, fork_dist_xy <= _SUCCESS_MAX_DIST_XY)
         done = torch.logical_and(done, knife_dist_xy <= _SUCCESS_MAX_DIST_XY)
-        done = torch.logical_and(done, fork_pos[:, 0] < plate_pos[:, 0]) # fork left
-        done = torch.logical_and(done, knife_pos[:, 0] > plate_pos[:, 0]) # knife right
+
+        done = torch.logical_and(done, fork_pos[:, 0] > plate_pos[:, 0])   # fork on +x
+        done = torch.logical_and(done, knife_pos[:, 0] < plate_pos[:, 0])  # knife on -x
+
+        # z difference check
+        Z_threshold = 0.03
+        fork_plate_z_ok = torch.abs(fork_pos[:, 2] - plate_pos[:, 2]) <= Z_threshold
+        knife_plate_z_ok = torch.abs(knife_pos[:, 2] - plate_pos[:, 2]) <= Z_threshold
+        fork_knife_z_ok = torch.abs(fork_pos[:, 2] - knife_pos[:, 2]) <= Z_threshold
+
+        done = torch.logical_and(done, fork_plate_z_ok)
+        done = torch.logical_and(done, knife_plate_z_ok)
+        done = torch.logical_and(done, fork_knife_z_ok)
 
         return bool(done.all().item())
 
@@ -246,10 +280,20 @@ class CutleryArrangementStateMachine(StateMachineBase):
         place_target_w = plate_pos_w.clone()
         place_target_w[:, 0] += x_sign * _PLACE_OFFSET
 
-        if self._step_count == 0 and self._event == 0:
+        phase_in_cycle = self._event % _PHASES_PER_OBJECT
+
+        # FIX: capture EE position on the FIRST step of every hover phase (phase 0),
+        # not just at global step 0 + event 0. The original code only captured on
+        # (step==0 and event==0), so the fork's hover phase (event==7) never got
+        # a valid _initial_ee_pos_w and the lerp was silently skipped.
+        if phase_in_cycle == 0 and self._step_count == 0:
             self._initial_ee_pos_w = self._ee_pos_w(robot).clone()
 
-        phase_in_cycle = self._event % _PHASES_PER_OBJECT
+        # DART: sample a fresh fixed noise offset on the first step of each phase.
+        if self._step_count == 0:
+            self._dart_noise_w = self._sample_dart_noise(
+                phase_in_cycle, num_envs, device, obj_pos_w.dtype
+            )
 
         target_quat_w = self._gripper_down_quat_w(
             obj_quat_w,
@@ -273,13 +317,22 @@ class CutleryArrangementStateMachine(StateMachineBase):
         elif phase_in_cycle == 2:
             target_pos_w, gripper_cmd = self._phase_grasp(grasp_anchor_w, num_envs, device)
         elif phase_in_cycle == 3:
-            target_pos_w, gripper_cmd = self._phase_lift(obj_pos_w, num_envs, device)
+            ee_pos_now_w = self._ee_pos_w(robot)
+            target_pos_w, gripper_cmd = self._phase_lift(ee_pos_now_w, plate_pos_w, num_envs, device)
         elif phase_in_cycle == 4:
             target_pos_w, gripper_cmd = self._phase_move_above_place(place_target_w, num_envs, device)
         elif phase_in_cycle == 5:
             target_pos_w, gripper_cmd = self._phase_lower_to_release(place_target_w, num_envs, device)
         else:
-            target_pos_w, gripper_cmd = self._phase_retreat(place_target_w, num_envs, device)
+            target_pos_w, gripper_cmd = self._phase_retreat(
+                place_target_w, num_envs, device, robot=robot
+            )
+
+        # DART: apply decayed noise to the target position.
+        # Noise decays from full magnitude at step 0 to zero at the last step,
+        # so the EE starts displaced and IK naturally pulls it back — generating
+        # recovery demonstrations without any extra logic.
+        target_pos_w = self._apply_dart_noise(target_pos_w, phase_in_cycle)
 
         return self._joint_position_franka_action(env, target_pos_w, target_quat_w, gripper_cmd)
 
@@ -290,6 +343,9 @@ class CutleryArrangementStateMachine(StateMachineBase):
     def _phase_move_above_object(self, obj_pos_w, num_envs, device):
         target = obj_pos_w.clone()
         target[:, 2] += _HOVER_Z_OFFSET
+        # Lerp from current EE position to the hover target so the arm moves
+        # smoothly rather than jumping. _initial_ee_pos_w is now always set
+        # at the start of this phase (see get_action fix above).
         if self._initial_ee_pos_w is not None:
             denom = max(self._events_dt[self._event] - 1, 1)
             alpha = min(self._step_count / denom, 1.0)
@@ -302,16 +358,20 @@ class CutleryArrangementStateMachine(StateMachineBase):
         return target, _constant_gripper(num_envs, device, _GRIPPER_OPEN)
 
     def _phase_grasp(self, obj_pos_w, num_envs, device):
-        # Hold the same height as the approach phase so the EE doesn't keep
-        # descending while the fingers are closing — that timing race causes
-        # empty grasps.
+        # Hold approach height while fingers close; prevents the EE from
+        # continuing to descend during the grasp, which causes empty grasps.
         target = obj_pos_w.clone()
         target[:, 2] += _GRASP_Z_OFFSET
         return target, _constant_gripper(num_envs, device, _GRIPPER_CLOSE)
 
-    def _phase_lift(self, obj_pos_w, num_envs, device):
-        target = obj_pos_w.clone()
-        target[:, 2] += _LIFT_Z_OFFSET
+    def _phase_lift(self, ee_pos_w, plate_pos_w, num_envs, device):
+        # Lock XY on the first step of this phase so the target does not drift
+        # with the held object's moving position (which is offset from the EE).
+        if self._step_count == 0 or self._lift_start_ee_xy_w is None:
+            self._lift_start_ee_xy_w = ee_pos_w[:, :2].clone()
+        target = ee_pos_w.clone()
+        target[:, :2] = self._lift_start_ee_xy_w
+        target[:, 2] = plate_pos_w[:, 2] + _LIFT_Z_OFFSET
         return target, _constant_gripper(num_envs, device, _GRIPPER_CLOSE)
 
     def _phase_move_above_place(self, place_pos_w, num_envs, device):
@@ -324,10 +384,70 @@ class CutleryArrangementStateMachine(StateMachineBase):
         target[:, 2] += _RELEASE_Z_OFFSET
         return target, _constant_gripper(num_envs, device, _GRIPPER_CLOSE)
 
-    def _phase_retreat(self, place_pos_w, num_envs, device):
+    def _phase_retreat(self, place_pos_w, num_envs, device, robot=None):
+        # Keep gripper CLOSED and continue targeting the release point until the
+        # EE has actually reached release altitude. This guards against phase 5
+        # timing out before IK converges (which would release the object mid-air).
+        # if robot is not None and self._ee_body_idx >= 0:
+        #     ee_z = robot.data.body_pos_w[:, self._ee_body_idx, 2]
+        #     release_z = place_pos_w[:, 2] + _RELEASE_Z_OFFSET
+        #     descent_complete = bool((ee_z <= release_z + _RELEASE_TOL_M).all().item())
+        # else:
+        #     descent_complete = True
+
+        # if not descent_complete:
+        #     target = place_pos_w.clone()
+        #     target[:, 2] += _RELEASE_Z_OFFSET
+        #     return target, _constant_gripper(num_envs, device, _GRIPPER_CLOSE)
+
         target = place_pos_w.clone()
         target[:, 2] += _LIFT_Z_OFFSET
         return target, _constant_gripper(num_envs, device, _GRIPPER_OPEN)
+
+    # ------------------------------------------------------------------
+    # DART helpers
+    # ------------------------------------------------------------------
+
+    def _sample_dart_noise(
+        self,
+        phase: int,
+        num_envs: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """Sample a fixed (x, y, z) noise offset for the current phase.
+
+        The offset is held constant throughout the phase and decayed to zero
+        in _apply_dart_noise, producing a smooth "drift → correct" shape.
+        Phase 3 (lift) has zero xy noise because _lift_start_ee_xy_w already
+        locks the xy target — adding lateral noise there would fight that lock.
+        """
+        sigma_xy = _DART_SIGMA_XY[phase]
+        sigma_z  = _DART_SIGMA_Z[phase]
+
+        noise = torch.zeros(num_envs, 3, device=device, dtype=dtype)
+        if sigma_xy > 0.0:
+            noise[:, :2] = torch.randn(num_envs, 2, device=device, dtype=dtype) * sigma_xy
+        if sigma_z > 0.0:
+            noise[:, 2] = torch.randn(num_envs, device=device, dtype=dtype) * sigma_z
+        return noise
+
+    def _apply_dart_noise(self, target_pos_w: torch.Tensor, phase: int) -> torch.Tensor:
+        """Add linearly-decayed DART noise to target_pos_w.
+
+        Decay: noise_scale = 1 - (step / duration), so the EE starts displaced
+        and IK drives it back to the true target by phase end.  The final few
+        steps have near-zero noise, meaning the demo reaches the correct state
+        before the next phase begins (important for grasp/release phases).
+        """
+        if self._dart_noise_w is None:
+            return target_pos_w
+
+        duration = max(self._events_dt[self._event] - 1, 1)
+        # decay_factor goes from 1.0 at step 0 to 0.0 at the last step
+        decay = max(1.0 - self._step_count / duration, 0.0)
+
+        return target_pos_w + self._dart_noise_w * decay
 
     # ------------------------------------------------------------------
     # Timeline
@@ -343,6 +463,8 @@ class CutleryArrangementStateMachine(StateMachineBase):
 
         self._event += 1
         self._step_count = 0
+        # Reset DART noise so a fresh offset is sampled on the next phase's step 0.
+        self._dart_noise_w = None
 
         if self._event >= len(self._events_dt):
             self._episode_done = True
@@ -351,9 +473,12 @@ class CutleryArrangementStateMachine(StateMachineBase):
         new_obj_idx = self._event // _PHASES_PER_OBJECT
         if new_obj_idx != self._current_object_idx:
             self._current_object_idx = new_obj_idx
+            # FIX: reset _initial_ee_pos_w so it is re-captured on the next
+            # hover phase's first step (get_action now handles both objects).
             self._initial_ee_pos_w = None
             self._gripper_down_yaw_w = None
             self._gripper_down_yaw_offset_w = None
+            self._lift_start_ee_xy_w = None
 
     def reset(self) -> None:
         self._step_count = 0
@@ -363,9 +488,11 @@ class CutleryArrangementStateMachine(StateMachineBase):
         self._initial_ee_pos_w = None
         self._gripper_down_yaw_w = None
         self._gripper_down_yaw_offset_w = None
+        self._lift_start_ee_xy_w = None
+        self._dart_noise_w = None
 
     # ------------------------------------------------------------------
-    # IK / control helpers (same as CupStackingStateMachine)
+    # IK / control helpers
     # ------------------------------------------------------------------
 
     def _ee_pos_w(self, robot) -> torch.Tensor:
@@ -449,13 +576,13 @@ class CutleryArrangementStateMachine(StateMachineBase):
         yaw_offset: float = 0.0,
     ) -> torch.Tensor:
         if self._gripper_down_yaw_w is None or self._gripper_down_yaw_w.shape[0] != num_envs:
-            base_yaw = _yaw_from_quat_wxyz(obj_quat_w).to(device=device, dtype=dtype) # gripper aligned with the orientation of the object
+            base_yaw = _yaw_from_quat_wxyz(obj_quat_w).to(device=device, dtype=dtype)
             self._gripper_down_yaw_offset_w = torch.empty(num_envs, device=device, dtype=dtype).uniform_(
                 _GRIPPER_DOWN_YAW_OFFSET_RANGE[0],
                 _GRIPPER_DOWN_YAW_OFFSET_RANGE[1],
             )
             if obj_name == _KNIFE_NAME:
-                base_yaw = torch.zeros_like(base_yaw) # fixed direction
+                base_yaw = torch.zeros_like(base_yaw)  # knife: fixed world yaw
             self._gripper_down_yaw_w = (
                 base_yaw + yaw_offset + self._gripper_down_yaw_offset_w
             ).clone()
