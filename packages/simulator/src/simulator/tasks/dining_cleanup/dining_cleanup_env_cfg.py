@@ -11,7 +11,7 @@ from isaaclab.sim.schemas import CollisionPropertiesCfg, MassPropertiesCfg, Rigi
 from isaaclab.sim.spawners.from_files import spawn_from_usd
 from isaaclab.sim.utils import clone
 from isaaclab.utils import configclass
-from pxr import PhysxSchema, Usd, UsdGeom, UsdPhysics
+from pxr import Gf, PhysxSchema, Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
 
 from leisaac.utils.general_assets import parse_usd_and_create_subassets
 from simulator import ASSETS_ROOT
@@ -30,7 +30,7 @@ BOWL_USD_PATH = DINING_OBJECTS_ROOT / "bowl" / "model_BalandaBowl_69323.usd"
 SPOON_USD_PATH = DINING_OBJECTS_ROOT / "spoon" / "model_Kitchen_Spoon_B008H2JLP8_LargeWooden_69323.usd"
 TRAY_USD_PATH = DINING_OBJECTS_ROOT / "tray" / "model_WhiteUtensilTray_69323.usd"
 TISSUE_USD_PATH = DINING_OBJECTS_ROOT / "tissue" / "model_tissue_001_69323.usd"
-VASE_USD_PATH = DINING_OBJECTS_ROOT / "vase" / "model_BlackVaseSmall_1_69323.usd"
+VASE_USD_PATH = DINING_OBJECTS_ROOT / "vase" / "model_B07JLBDT51_69323.usd"
 
 BOWL_SCALE: tuple[float, float, float] = (0.57, 0.57, 0.57)
 SPOON_SCALE: tuple[float, float, float] = (0.62, 0.62, 0.62)
@@ -38,8 +38,9 @@ TRAY_SCALE: tuple[float, float, float] = (0.79, 1.77, 1.0)
 TISSUE_SCALE: tuple[float, float, float] = (1.0, 1.0, 1.0)
 VASE_SCALE: tuple[float, float, float] = (1.0, 1.0, 1.0)
 CLOTH_FOOTPRINT_SIZE: tuple[float, float] = (0.055, 0.115)
-CLOTH_THICKNESS: float = 0.012
+CLOTH_THICKNESS: float = 0.05
 CLOTH_SIZE: tuple[float, float, float] = (*CLOTH_FOOTPRINT_SIZE, CLOTH_THICKNESS)
+VASE_DIFFUSE_COLOR: tuple[float, float, float] = (0.36, 0.52, 0.26)
 RIGID_PROPS = RigidBodyPropertiesCfg(
     disable_gravity=False,
     max_depenetration_velocity=5.0,
@@ -65,14 +66,40 @@ def _ensure_rigid_object_schemas(root_prim: Usd.Prim) -> None:
             UsdPhysics.CollisionAPI.Apply(prim)
             PhysxSchema.PhysxCollisionAPI.Apply(prim)
             mesh_collision = UsdPhysics.MeshCollisionAPI.Apply(prim)
-            # mesh_collision.CreateApproximationAttr().Set("convexHull")
-            approximation = "convexDecomposition" if root_prim.GetName() == "bowl" or root_prim.GetName() == "tray" else "convexHull"
+            approximation = "convexDecomposition" if root_prim.GetName() in ("bowl", "tray") else "convexHull"
             mesh_collision.CreateApproximationAttr().Set(approximation)
             collision_count += 1
 
     if collision_count == 0:
         UsdPhysics.CollisionAPI.Apply(root_prim)
         PhysxSchema.PhysxCollisionAPI.Apply(root_prim)
+
+
+def _bind_preview_surface_material(
+    root_prim: Usd.Prim,
+    *,
+    name: str,
+    diffuse_color: tuple[float, float, float],
+    roughness: float = 0.55,
+    metallic: float = 0.0,
+) -> None:
+    """Bind a simple material override to every mesh under ``root_prim``."""
+    stage = root_prim.GetStage()
+    looks_path = root_prim.GetPath().AppendChild("Looks")
+    UsdGeom.Scope.Define(stage, looks_path)
+
+    material = UsdShade.Material.Define(stage, looks_path.AppendChild(name))
+    shader = UsdShade.Shader.Define(stage, material.GetPath().AppendChild("Shader"))
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(*diffuse_color))
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(roughness)
+    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(metallic)
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+
+    UsdShade.MaterialBindingAPI.Apply(root_prim).Bind(material)
+    for prim in Usd.PrimRange(root_prim):
+        if prim.IsA(UsdGeom.Mesh):
+            UsdShade.MaterialBindingAPI.Apply(prim).Bind(material)
 
 
 @clone
@@ -99,6 +126,13 @@ def _spawn_rigid_usd(
         cfg.mass_props = mass_props
 
     _ensure_rigid_object_schemas(root_prim)
+    if str(root_prim.GetPath()).endswith("/vase"):
+        _bind_preview_surface_material(
+            root_prim,
+            name="green_vase_material",
+            diffuse_color=VASE_DIFFUSE_COLOR,
+            roughness=0.48,
+        )
 
     if rigid_props is not None:
         sim_schemas.modify_rigid_body_properties(prim_path, rigid_props)
@@ -171,7 +205,7 @@ class DiningCleanupSceneCfg(SingleArmFrankaTaskSceneCfg):
         prim_path="{ENV_REGEX_NS}/Scene/spoon",
         init_state=RigidObjectCfg.InitialStateCfg(
             pos=(0.22, -0.42, 0.05),
-            rot=(0.0, 0.0, 0.0, 1.0),
+            rot=(0.0, 0.0, 0.383, 0.924),
         ),
         spawn=sim_utils.UsdFileCfg(
             func=_spawn_rigid_usd,

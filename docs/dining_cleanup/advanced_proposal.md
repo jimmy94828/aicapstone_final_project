@@ -90,10 +90,10 @@ The fixed object positions are:
 tray   = (0.57, -0.36, 0.05)
 tissue = (0.35, -0.12, 0.074)
 vase   = (0.35, -0.26, 0.05)
-cloth  = (0.35, -0.43, 0.056)
+cloth  = (0.35, -0.43, 0.0625)
 ```
 
-In the current implementation, the cloth is represented as a thin rigid cuboid rather than the original particle-cloth USD asset. This avoids startup drift from particle-cloth dynamics while preserving the intended wiping footprint.
+In the current implementation, the cloth is represented as a rigid cuboid rather than the original particle-cloth USD asset. Its current geometry is `0.055 m x 0.115 m x 0.025 m`, which avoids startup drift from particle-cloth dynamics while preserving the intended wiping footprint and improving graspability.
 
 ## Environment Settings and Dataset Generation
 

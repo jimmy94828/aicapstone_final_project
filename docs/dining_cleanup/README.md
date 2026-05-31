@@ -63,6 +63,7 @@ vase/model_BlackVaseSmall_1_69323.usd
 ```
 
 cloth 目前改用 `sim_utils.CuboidCfg` 建立穩定的薄片 rigid object，避免原本 `model_tablecloth.usd` 的 particle-cloth schema 在 simulator 啟動時造成初始位置漂移。
+vase asset 本身是黑色材質；env config 會在 spawn 後套用綠色 `UsdPreviewSurface` material override，讓它在 simulator 中和其他物件更容易區分。
 
 ### 桌面座標系
 
@@ -95,7 +96,7 @@ packages/simulator/src/simulator/tasks/dining_cleanup/dining_cleanup_env_cfg.py
 | tray | `(0.57, -0.36, 0.05)` |
 | tissue | `(0.35, -0.12, 0.074)` |
 | vase | `(0.35, -0.26, 0.05)` |
-| cloth | `(0.35, -0.43, 0.056)` |
+| cloth | `(0.35, -0.43, 0.0625)` |
 
 中間區域的 y 順序符合需求：
 
@@ -121,7 +122,7 @@ bowl/spoon shared y = [-0.50, -0.22]
 額外限制：
 
 - bowl/spoon 與 tray/tissue/vase/cloth 依 scaled footprint 半徑避免重疊。
-- bowl 與 spoon 之間的最小中心距離目前為 `0.195 m`，等於 bowl 半徑 `0.080` + spoon 半徑 `0.100` + clearance `0.015`。
+- bowl 與 spoon 之間的最小中心距離目前為 `0.220 m`，等於 bowl 半徑 `0.080` + spoon 半徑 `0.100` + clearance `0.040`。
 - bowl 與 spoon 的最大中心距離目前為 `0.280 m`，避免兩者初始位置過度分離。
 - 只生成 `status == "full"` 的 episode
 
@@ -142,9 +143,9 @@ USD bbox / task geometry 與 task scale：
 | tray | `0.304 x 0.147 x 0.054 m` | `(0.79, 1.77, 1.00)` | `0.240 x 0.260 m` |
 | tissue | `0.073 x 0.103 x 0.050 m` | `(1.00, 1.00, 1.00)` | `0.073 x 0.103 m` |
 | vase | `0.100 x 0.100 x 0.114 m` | `(1.00, 1.00, 1.00)` | `0.100 x 0.100 m` |
-| cloth | `CuboidCfg(size=(0.055, 0.115, 0.012))` | no USD scale / no z yaw | `0.055 x 0.115 m` |
+| cloth | `CuboidCfg(size=(0.055, 0.115, 0.025))` | no USD scale / no z yaw | `0.055 x 0.115 m` |
 
-Franka gripper 初始最大開口約為 `0.04 + 0.04 = 0.08 m`。目前 cloth cuboid 的窄邊為 `0.055 m`，可由夾爪夾取窄邊；z 厚度為 `0.012 m`，讓 PhysX 在啟動時有穩定的薄片碰撞幾何。
+Franka gripper 初始最大開口約為 `0.04 + 0.04 = 0.08 m`。目前 cloth cuboid 的窄邊為 `0.055 m`，可由夾爪夾取窄邊；z 厚度為 `0.025 m`，讓 PhysX 在啟動時有穩定的薄片碰撞幾何，並提高夾取時的接觸厚度。
 
 ## Object Pose 生成
 
@@ -221,12 +222,12 @@ python3 scripts/generate_dining_cleanup_object_poses.py \
 
 ```text
 episodes = 500
-bowl world x = [0.100, 0.219]
+bowl world x = [0.100, 0.184]
 bowl world y = [-0.500, -0.220]
-spoon world x = [0.101, 0.191]
+spoon world x = [0.100, 0.162]
 spoon world y = [-0.500, -0.220]
-bowl-spoon world XY distance = [0.195, 0.278]
-scaled footprint clearance min = 0.195
+bowl-spoon world XY distance = [0.220, 0.279]
+scaled footprint clearance min = 0.220
 configured bowl-spoon max distance = 0.280
 ```
 
@@ -308,15 +309,15 @@ python3 scripts/visualize_dining_cleanup_layout.py \
 - cloth wipe coverage region
 - cloth wipe lane path
 
-圖中的虛線圓圈是 generator 的 keep-out radius，加上 `0.015 m` clearance 後用來做避碰檢查；它不是物件的實際外形。實際桌面佔據大小以半透明矩形表示。
+圖中的虛線圓圈是 generator 的 keep-out radius，加上 `0.040 m` clearance 後用來做避碰檢查；它不是物件的實際外形。實際桌面佔據大小以半透明矩形表示。
 
 ### 目前視覺化統計
 
 執行 visualization 後會印出：
 
 ```text
-bowl: n=500, x=[0.100, 0.219], y=[-0.500, -0.220]
-spoon: n=500, x=[0.101, 0.191], y=[-0.500, -0.220]
+bowl: n=500, x=[0.100, 0.184], y=[-0.500, -0.220]
+spoon: n=500, x=[0.100, 0.162], y=[-0.500, -0.220]
 table: x=[0.000, 0.700], y=[-0.650, 0.000]
 wipe region: x=[0.040, 0.220], y=[-0.500, -0.150]
 planned cloth/table coverage: 91.7%
@@ -417,7 +418,7 @@ _grasp_anchor_w("cloth") = cloth center
 cloth 固定起始位置：
 
 ```text
-cloth = (0.35, -0.43, 0.056)
+cloth = (0.35, -0.43, 0.0625)
 ```
 
 擦拭區域：

@@ -34,7 +34,7 @@ TRAY_SUCCESS_X_HALF_WIDTH = 0.12
 TRAY_SUCCESS_Y_HALF_WIDTH = 0.13
 TRAY_BOWL_TARGET = (TRAY_WORLD_POS[0], TRAY_WORLD_POS[1] + 0.055)
 TRAY_SPOON_TARGET = (TRAY_WORLD_POS[0], TRAY_WORLD_POS[1] - 0.055)
-MIN_CLEARANCE = 0.015
+MIN_CLEARANCE = 0.040
 
 # Top-down footprints after applying the task spawn scale in
 # DiningCleanupEnvCfg.  These are measured from the updated USD assets and are

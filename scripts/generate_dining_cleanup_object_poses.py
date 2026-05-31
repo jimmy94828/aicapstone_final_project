@@ -29,7 +29,7 @@ DEFAULT_VIDEO_NAME = "synthetic_dining_cleanup_poses.mp4"
 
 OBJECT_WORLD_X_RANGE = (0.10, 0.24)
 OBJECT_WORLD_Y_RANGE = (-0.50, -0.22)
-MIN_CLEARANCE = 0.015
+MIN_CLEARANCE = 0.040
 MAX_PAIR_DISTANCE = 0.28
 
 # Top-down footprints after applying the task spawn scale in
