@@ -9,7 +9,7 @@ VERSION="v1-9"
 DATASET_REPO_ID="${HF_USER}/AI-aiCapstoneData-lerobot-advanced-${VERSION}"
 TASK_ID="HCIS-DiningCleanup-SingleArm-v0"
 OBJECT_POSES="data/dining_clean/dining_cleanup_object_poses_100.json"
-HF_TOKEN="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"
+HF_TOKEN="YOURTOKEN"
 LOG="${WORKSPACE}/datagen_advanced_${VERSION}.log"
 
 # Resolve Vulkan ICD (same logic as Makefile)
