@@ -94,44 +94,15 @@ hf upload ${HF_USER}/<repo_id> data/<demo_directory_name>/demos/mapping/object_p
    cd aicapstone
    ```
 
-## Launch Isaac Lab
+## Launch Isaac Lab and run
+Modify 
+1. HF token
+2. docker run arguments:     -v "/home/threedavatar/.cache/huggingface:/root/.cache/huggingface" \ # at line 39
 
 ```bash
-make launch-isaaclab
+bash run_datagen_adv-v1.sh
 ```
-
-This builds the Isaac Sim container. On success, the shell drops you inside the container.
-
-Download the session directory produced by the UMI pipeline:
-
-```bash
-hf download ${HF_USER}/<repo_id> --local-dir data/<demo_directory_name>
-```
-
-## Run the data generation pipeline
-
-The `--lerobot_dataset_repo_id` should be your own Hugging Face dataset repo.
-
-Available tasks:
-
-- `HCIS-CupStacking-SingleArm-v0`
-- `HCIS-CutleryArrangement-SingleArm-v0`
-- `HCIS-ToyBlocksCollection-SingleArm-v0`
-
-```bash
-python scripts/datagen/generate.py \
-    --task HCIS-CupStacking-SingleArm-v0 \
-    --num_envs 1 \
-    --device cuda \
-    --enable_cameras \
-    --record \
-    --use_lerobot_recorder \
-    --lerobot_dataset_repo_id ${HF_USER}/<repo_id> \
-    --object_poses data/<demo_directory_name>/object_poses.json
-```
-
 Upload the recorded dataset to Hugging Face Hub:
-
 ```bash
 hf upload ${HF_USER}/<repo_id> ~/.cache/huggingface/lerobot/${HF_USER}/<repo_id>/
 ```
