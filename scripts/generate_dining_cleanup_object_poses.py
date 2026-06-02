@@ -39,8 +39,8 @@ SPOON_RAW_YAW = (SPOON_WORLD_YAW - SPOON_YAW_OFFSET + math.pi) % (2.0 * math.pi)
 # DiningCleanupEnvCfg.  Bowl/spoon can yaw per episode, so overlap rejection
 # uses each object's bounding-circle radius derived from this footprint.
 FOOTPRINT_SIZE = {
-    "bowl": (0.160, 0.160),
-    "spoon": (0.041, 0.200),
+    "bowl": (0.140, 0.140),
+    "spoon": (0.040, 0.194),
     "tray": (0.240, 0.260),
     "tissue": (0.073, 0.103),
     "vase": (0.100, 0.100),

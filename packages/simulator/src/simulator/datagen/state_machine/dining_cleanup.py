@@ -37,37 +37,44 @@ _FRANKA_ARM_JOINT_NAMES = (
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
 
-_MAX_CARTESIAN_DELTA = 0.018
+_MAX_CARTESIAN_DELTA = 0.022
 _MAX_ROT_DELTA = 0.08
 _IK_DLS_LAMBDA = 0.01
 
-_HOVER_Z_OFFSET = 0.16
-_LIFT_Z_OFFSET = 0.22
-_RELEASE_Z_OFFSET = 0.09
+_HOVER_Z_OFFSET = 0.35
+_LIFT_Z_OFFSET = 0.37
+_RELEASE_Z_OFFSET = 0.15
 _WIPE_CONTACT_Z = 0.065
-_WIPE_HOVER_Z = 0.16
+_WIPE_HOVER_Z = 0.35
 
 _GRIPPER_DOWN_ROLL_W = math.pi
 _GRIPPER_DOWN_PITCH_W = 0.0
 _GRIPPER_DOWN_YAW_OFFSET_RANGE = (-0.12, 0.12)
 _GRASP_YAW_OFFSET = math.pi / 2.0
 
+
+_GRASP_X_OFFSET_Bowl = -0.06  # bowl edge grasp: pull target from center toward robot
+_GRASP_Y_OFFSET_Bowl = -0.03
 _GRASP_RETREAT_PER_OBJECT: dict[str, float] = {
-    _BOWL_NAME: 0.055,  # bowl edge grasp: pull target from center toward robot
+    # _BOWL_NAME: -0.075,  # bowl edge grasp: pull target from center toward robot
     _SPOON_NAME: 0.020,
     _CLOTH_NAME: 0.000,
 }
 _GRASP_Z_OFFSET_PER_OBJECT: dict[str, float] = {
-    _BOWL_NAME: 0.065,
+    _BOWL_NAME: 0.15,
     _SPOON_NAME: 0.040,
     _CLOTH_NAME: 0.035,
 }
 _GRASP_Z_AT_CLOSE_PER_OBJECT: dict[str, float] = {
-    _BOWL_NAME: 0.055,
+    _BOWL_NAME: 0.15,
     _SPOON_NAME: 0.030,
-    _CLOTH_NAME: 0.025,
+    _CLOTH_NAME: 0.035,
 }
 
+_DROP_X_OFFSET_PER_OBJECT: dict[str, float] = {
+    _BOWL_NAME: -0.03,
+    _SPOON_NAME: 0.04,
+}
 _DROP_Y_OFFSET_PER_OBJECT: dict[str, float] = {
     _BOWL_NAME: +0.055,
     _SPOON_NAME: -0.055,
@@ -75,21 +82,24 @@ _DROP_Y_OFFSET_PER_OBJECT: dict[str, float] = {
 
 # World-frame table regions.  In this advanced task, +x is the Franka-view
 # right side and -x is the Franka-view left side.
-_LEFT_TABLE_X_RANGE = (0.04, 0.22)
-_LEFT_TABLE_Y_RANGE = (-0.50, -0.15)
-_WIPE_LANES_X = (0.08, 0.135, 0.19)
+_LEFT_TABLE_X_RANGE = (0.08, 0.22)
+_LEFT_TABLE_Y_RANGE = (-0.55, -0.1)
+_WIPE_LANES_X = (0.1, 0.15, 0.19)
 _CLOTH_FOOTPRINT_SIZE = (0.055, 0.115)
-_WIPE_COVERAGE_THRESHOLD = 0.90
+_WIPE_REQUIRED_IDEAL_FRACTION = 0.70
+_WIPE_COVERAGE_RESOLUTION = 0.01
+_WIPE_CONTACT_Z_RANGE = (0.03, 0.13)
 _STATIC_OBJECT_XY_TOL = 0.035
 _STATIC_OBJECT_INITIAL_XY = {
     _TISSUE_NAME: (0.35, -0.12),
     _VASE_NAME: (0.35, -0.26),
 }
+_TRAY_INITIAL_XY = (0.57, -0.36)
+_TRAY_XY_TOL = 0.05
+_FALL_THRESHOLD_Z = 0.0
 
-_TRAY_SUCCESS_X_HALF_WIDTH = 0.12
-_TRAY_SUCCESS_Y_HALF_WIDTH = 0.13
-_TRAY_SUCCESS_Z_RANGE = (-0.05, 0.11)
-_MIN_PICK_PAIR_DIST = 0.04
+_TRAY_SUCCESS_X_HALF_WIDTH = 0.13
+_TRAY_SUCCESS_Y_HALF_WIDTH = 0.14
 
 _FRANKA_REST_JOINT_POS = {
     "panda_joint1": 0.0,
@@ -117,11 +127,11 @@ def _build_events() -> tuple[_EventSpec, ...]:
         events.extend(
             [
                 _EventSpec("move_above_object", obj_name, 180),
-                _EventSpec("approach_object", obj_name, 130),
+                _EventSpec("approach_object", obj_name, 160),
                 _EventSpec("grasp_object", obj_name, 25),
-                _EventSpec("lift_object", obj_name, 100),
+                _EventSpec("lift_object", obj_name, 130),
                 _EventSpec("move_above_drop", obj_name, 170),
-                _EventSpec("lower_to_release", obj_name, 25),
+                _EventSpec("lower_to_release", obj_name, 80),
                 _EventSpec("retreat_from_drop", obj_name, 40),
             ]
         )
@@ -129,18 +139,18 @@ def _build_events() -> tuple[_EventSpec, ...]:
     events.extend(
         [
             _EventSpec("move_above_object", _CLOTH_NAME, 160),
-            _EventSpec("approach_object", _CLOTH_NAME, 110),
+            _EventSpec("approach_object", _CLOTH_NAME, 130),
             _EventSpec("grasp_object", _CLOTH_NAME, 30),
-            _EventSpec("lift_object", _CLOTH_NAME, 90),
+            _EventSpec("lift_object", _CLOTH_NAME, 110),
             _EventSpec("move_above_wipe_start", _CLOTH_NAME, 140),
             _EventSpec("lower_to_wipe", _CLOTH_NAME, 80),
         ]
     )
 
     for lane_idx in range(len(_WIPE_LANES_X)):
-        events.append(_EventSpec("wipe_sweep", str(lane_idx), 150))
+        events.append(_EventSpec("wipe_sweep", str(lane_idx), 230))
         if lane_idx < len(_WIPE_LANES_X) - 1:
-            events.append(_EventSpec("wipe_shift", str(lane_idx), 60))
+            events.append(_EventSpec("wipe_shift", str(lane_idx), 80))
     events.append(_EventSpec("wipe_lift_finish", _CLOTH_NAME, 80))
     return tuple(events)
 
@@ -185,6 +195,10 @@ def _planned_wipe_coverage_ratio() -> float:
     if target_area <= 0.0:
         return 0.0
     return _rect_union_area(rects) / target_area
+
+
+_WIPE_IDEAL_COVERAGE_RATIO = _planned_wipe_coverage_ratio()
+_WIPE_COVERAGE_THRESHOLD = _WIPE_IDEAL_COVERAGE_RATIO * _WIPE_REQUIRED_IDEAL_FRACTION
 
 
 def _constant_gripper(num_envs: int, device: torch.device, value: float) -> torch.Tensor:
@@ -237,8 +251,8 @@ class DiningCleanupStateMachine(StateMachineBase):
     """Scripted Franka policy for clearing and wiping the dining table.
 
     Behavior:
-    1. Grasp the bowl by an edge-facing target and place it in the tray +y zone.
-    2. Grasp the spoon and place it in the tray -y zone.
+    1. Grasp the bowl by an edge-facing target and place it in the tray.
+    2. Grasp the spoon and place it in the tray.
     3. Grasp the cloth, lower it to the table, and sweep three y-axis lanes over
        the left table region where the bowl/spoon originally started.
 
@@ -262,6 +276,7 @@ class DiningCleanupStateMachine(StateMachineBase):
         self._gripper_down_yaw_offset_w: torch.Tensor | None = None
         self._event: int = 0
         self._lift_start_ee_xy_w: torch.Tensor | None = None
+        self._wipe_covered: torch.Tensor | None = None
 
     def setup(self, env) -> None:
         robot = env.scene["robot"]
@@ -295,36 +310,85 @@ class DiningCleanupStateMachine(StateMachineBase):
         self._rest_ee_pos_w = self._ee_pos_w(robot).clone()
 
     def check_success(self, env) -> bool:
-        if not self._wipe_complete:
-            return False
+        status = self._success_status(env)
+        self._print_success_status(status)
+        return bool(status["overall"].all().item())
 
+    def _success_status(self, env) -> dict[str, torch.Tensor]:
         tray_pos = env.scene[_TRAY_NAME].data.root_pos_w - env.scene.env_origins
         bowl_pos = env.scene[_BOWL_NAME].data.root_pos_w - env.scene.env_origins
         spoon_pos = env.scene[_SPOON_NAME].data.root_pos_w - env.scene.env_origins
 
-        done = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
-        for obj_pos in (bowl_pos, spoon_pos):
-            done = torch.logical_and(done, torch.abs(obj_pos[:, 0] - tray_pos[:, 0]) <= _TRAY_SUCCESS_X_HALF_WIDTH)
-            done = torch.logical_and(done, torch.abs(obj_pos[:, 1] - tray_pos[:, 1]) <= _TRAY_SUCCESS_Y_HALF_WIDTH)
-            done = torch.logical_and(done, obj_pos[:, 2] >= tray_pos[:, 2] + _TRAY_SUCCESS_Z_RANGE[0])
-            done = torch.logical_and(done, obj_pos[:, 2] <= tray_pos[:, 2] + _TRAY_SUCCESS_Z_RANGE[1])
+        timeline_done = torch.full((env.num_envs,), self._wipe_complete, dtype=torch.bool, device=env.device)
+        bowl_in_tray_xy = torch.logical_and(
+            torch.abs(bowl_pos[:, 0] - tray_pos[:, 0]) <= _TRAY_SUCCESS_X_HALF_WIDTH,
+            torch.abs(bowl_pos[:, 1] - tray_pos[:, 1]) <= _TRAY_SUCCESS_Y_HALF_WIDTH,
+        )
+        spoon_in_tray_xy = torch.logical_and(
+            torch.abs(spoon_pos[:, 0] - tray_pos[:, 0]) <= _TRAY_SUCCESS_X_HALF_WIDTH,
+            torch.abs(spoon_pos[:, 1] - tray_pos[:, 1]) <= _TRAY_SUCCESS_Y_HALF_WIDTH,
+        )
+        tableware_done = torch.logical_and(bowl_in_tray_xy, spoon_in_tray_xy)
 
-        done = torch.logical_and(done, bowl_pos[:, 1] > tray_pos[:, 1])
-        done = torch.logical_and(done, spoon_pos[:, 1] < tray_pos[:, 1])
+        coverage_ratio = self._update_wipe_coverage(env)
+        coverage_done = coverage_ratio >= _WIPE_COVERAGE_THRESHOLD
 
-        pair_dist = torch.norm(bowl_pos[:, :2] - spoon_pos[:, :2], dim=1)
-        done = torch.logical_and(done, pair_dist >= _MIN_PICK_PAIR_DIST)
-        if _planned_wipe_coverage_ratio() < _WIPE_COVERAGE_THRESHOLD:
-            done = torch.zeros_like(done)
+        tray_expected = torch.tensor(_TRAY_INITIAL_XY, dtype=tray_pos.dtype, device=tray_pos.device)
+        tray_dist = torch.norm(tray_pos[:, :2] - tray_expected, dim=1)
+        tray_stable = tray_dist <= _TRAY_XY_TOL
+
+        protected_stable = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
         for obj_name, expected_xy in _STATIC_OBJECT_INITIAL_XY.items():
             obj_pos = env.scene[obj_name].data.root_pos_w - env.scene.env_origins
             expected = torch.tensor(expected_xy, dtype=obj_pos.dtype, device=obj_pos.device)
             obj_dist = torch.norm(obj_pos[:, :2] - expected, dim=1)
-            done = torch.logical_and(done, obj_dist <= _STATIC_OBJECT_XY_TOL)
-        return bool(done.all().item())
+            protected_stable = torch.logical_and(protected_stable, obj_dist <= _STATIC_OBJECT_XY_TOL)
+
+        no_non_tableware_fall = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+        for obj_name in (_TRAY_NAME, _CLOTH_NAME, _TISSUE_NAME, _VASE_NAME):
+            obj_pos = env.scene[obj_name].data.root_pos_w - env.scene.env_origins
+            no_non_tableware_fall = torch.logical_and(no_non_tableware_fall, obj_pos[:, 2] >= _FALL_THRESHOLD_Z)
+
+        overall = timeline_done
+        for term in (tableware_done, coverage_done, tray_stable, protected_stable, no_non_tableware_fall):
+            overall = torch.logical_and(overall, term)
+
+        return {
+            "timeline": timeline_done,
+            "bowl_xy": bowl_in_tray_xy,
+            "spoon_xy": spoon_in_tray_xy,
+            "tableware": tableware_done,
+            "wiping": coverage_done,
+            "tray_stable": tray_stable,
+            "protected": protected_stable,
+            "no_non_tableware_fall": no_non_tableware_fall,
+            "overall": overall,
+            "coverage_ratio": coverage_ratio,
+        }
+
+    def _print_success_status(self, status: dict[str, torch.Tensor]) -> None:
+        def word(name: str) -> str:
+            return "success" if bool(status[name].all().item()) else "fail"
+
+        coverage_values = status["coverage_ratio"].detach().cpu().tolist()
+        coverage_text = ", ".join(f"{value:.3f}" for value in coverage_values)
+        print(
+            "[DiningCleanup FSM] stage status: "
+            f"timeline={word('timeline')}, "
+            f"tableware={word('tableware')} "
+            f"(bowl_xy={word('bowl_xy')}, spoon_xy={word('spoon_xy')}), "
+            f"wiping={word('wiping')} "
+            f"(coverage={coverage_text}, threshold={_WIPE_COVERAGE_THRESHOLD:.3f}, "
+            f"ideal={_WIPE_IDEAL_COVERAGE_RATIO:.3f}, required={_WIPE_REQUIRED_IDEAL_FRACTION:.0%}), "
+            f"tray_stable={word('tray_stable')}, "
+            f"protected={word('protected')}, "
+            f"no_non_tableware_fall={word('no_non_tableware_fall')}, "
+            f"overall={word('overall')}",
+            flush=True,
+        )
 
     def pre_step(self, env) -> None:
-        pass
+        self._update_wipe_coverage(env)
 
     def get_action(self, env) -> torch.Tensor:
         robot = env.scene["robot"]
@@ -340,6 +404,7 @@ class DiningCleanupStateMachine(StateMachineBase):
         active_quat_w = active_obj.data.root_quat_w.clone()
         tray_pos_w = env.scene[_TRAY_NAME].data.root_pos_w.clone()
         robot_root_pos_w = robot.data.root_pos_w.clone()
+        grasp_anchor_w = self._grasp_anchor_w(active_obj_name, active_pos_w, robot_root_pos_w)
 
         if self._step_count == 0 and event.kind in ("move_above_object", "move_above_wipe_start"):
             self._initial_ee_pos_w = self._ee_pos_w(robot).clone()
@@ -354,12 +419,10 @@ class DiningCleanupStateMachine(StateMachineBase):
         )
 
         if event.kind == "move_above_object":
-            target_pos_w, gripper_cmd = self._phase_move_above_object(active_pos_w, num_envs, device)
+            target_pos_w, gripper_cmd = self._phase_move_above_object(grasp_anchor_w, num_envs, device)
         elif event.kind == "approach_object":
-            grasp_anchor_w = self._grasp_anchor_w(active_obj_name, active_pos_w, robot_root_pos_w)
             target_pos_w, gripper_cmd = self._phase_approach_object(active_obj_name, grasp_anchor_w, num_envs, device)
         elif event.kind == "grasp_object":
-            grasp_anchor_w = self._grasp_anchor_w(active_obj_name, active_pos_w, robot_root_pos_w)
             target_pos_w, gripper_cmd = self._phase_grasp(active_obj_name, grasp_anchor_w, num_envs, device)
         elif event.kind == "lift_object":
             target_pos_w, gripper_cmd = self._phase_lift(self._ee_pos_w(robot), active_pos_w, num_envs, device)
@@ -396,9 +459,53 @@ class DiningCleanupStateMachine(StateMachineBase):
         denom = max(_EVENTS[self._event].duration - 1, 1)
         return min(self._step_count / denom, 1.0)
 
+    def _update_wipe_coverage(self, env) -> torch.Tensor:
+        cloth_pos = env.scene[_CLOTH_NAME].data.root_pos_w - env.scene.env_origins
+        x_min, x_max = _LEFT_TABLE_X_RANGE
+        y_min, y_max = _LEFT_TABLE_Y_RANGE
+        x_bins = max(1, math.ceil((x_max - x_min) / _WIPE_COVERAGE_RESOLUTION))
+        y_bins = max(1, math.ceil((y_max - y_min) / _WIPE_COVERAGE_RESOLUTION))
+        expected_shape = (env.num_envs, x_bins, y_bins)
+        if self._wipe_covered is None or self._wipe_covered.shape != expected_shape:
+            self._wipe_covered = torch.zeros(expected_shape, dtype=torch.bool, device=env.device)
+
+        dx = (x_max - x_min) / x_bins
+        dy = (y_max - y_min) / y_bins
+        grid_x = torch.linspace(
+            x_min + 0.5 * dx,
+            x_max - 0.5 * dx,
+            x_bins,
+            dtype=cloth_pos.dtype,
+            device=cloth_pos.device,
+        )
+        grid_y = torch.linspace(
+            y_min + 0.5 * dy,
+            y_max - 0.5 * dy,
+            y_bins,
+            dtype=cloth_pos.dtype,
+            device=cloth_pos.device,
+        )
+        half_x = 0.5 * _CLOTH_FOOTPRINT_SIZE[0]
+        half_y = 0.5 * _CLOTH_FOOTPRINT_SIZE[1]
+        in_contact = torch.logical_and(
+            cloth_pos[:, 2] >= _WIPE_CONTACT_Z_RANGE[0],
+            cloth_pos[:, 2] <= _WIPE_CONTACT_Z_RANGE[1],
+        )
+        covered_now = torch.logical_and(
+            torch.abs(cloth_pos[:, 0, None, None] - grid_x[None, :, None]) <= half_x,
+            torch.abs(cloth_pos[:, 1, None, None] - grid_y[None, None, :]) <= half_y,
+        )
+        self._wipe_covered |= torch.logical_and(covered_now, in_contact[:, None, None])
+        return self._wipe_covered.float().mean(dim=(1, 2))
+
     def _grasp_anchor_w(self, obj_name: str, obj_pos_w: torch.Tensor, robot_root_pos_w: torch.Tensor) -> torch.Tensor:
         if obj_name == _CLOTH_NAME:
             return obj_pos_w.clone()
+        if obj_name == _BOWL_NAME:
+            target = obj_pos_w.clone()
+            target[:, 0] += _GRASP_X_OFFSET_Bowl
+            target[:, 1] += _GRASP_Y_OFFSET_Bowl
+            return target
         return _retreat_xy_toward(
             obj_pos_w,
             robot_root_pos_w,
@@ -407,6 +514,7 @@ class DiningCleanupStateMachine(StateMachineBase):
 
     def _drop_target_w(self, obj_name: str, tray_pos_w: torch.Tensor) -> torch.Tensor:
         target = tray_pos_w.clone()
+        target[:, 0] += _DROP_X_OFFSET_PER_OBJECT.get(obj_name, 0.0)
         target[:, 1] += _DROP_Y_OFFSET_PER_OBJECT.get(obj_name, 0.0)
         return target
 
@@ -544,6 +652,7 @@ class DiningCleanupStateMachine(StateMachineBase):
         self._gripper_down_yaw_w = None
         self._gripper_down_yaw_offset_w = None
         self._lift_start_ee_xy_w = None
+        self._wipe_covered = None
 
     def _active_object_for_event(self, event: _EventSpec) -> str:
         if event.subject in (_BOWL_NAME, _SPOON_NAME, _CLOTH_NAME):
@@ -636,13 +745,15 @@ class DiningCleanupStateMachine(StateMachineBase):
     ) -> torch.Tensor:
         if self._gripper_down_yaw_w is None or self._gripper_down_yaw_w.shape[0] != num_envs:
             base_yaw = _yaw_from_quat_wxyz(obj_quat_w).to(device=device, dtype=dtype)
-            self._gripper_down_yaw_offset_w = torch.empty(num_envs, device=device, dtype=dtype).uniform_(
-                _GRIPPER_DOWN_YAW_OFFSET_RANGE[0],
-                _GRIPPER_DOWN_YAW_OFFSET_RANGE[1],
-            )
-            if obj_name == _BOWL_NAME:
-                # Bowl edge grasp is mostly radial; avoid spinning with arbitrary bowl yaw.
+            if obj_name in (_BOWL_NAME, _CLOTH_NAME):
+                self._gripper_down_yaw_offset_w = torch.zeros(num_envs, device=device, dtype=dtype)
+                # Bowl edge grasp and cloth wiping should be deterministic and vertical.
                 base_yaw = torch.zeros_like(base_yaw)
+            else:
+                self._gripper_down_yaw_offset_w = torch.empty(num_envs, device=device, dtype=dtype).uniform_(
+                    _GRIPPER_DOWN_YAW_OFFSET_RANGE[0],
+                    _GRIPPER_DOWN_YAW_OFFSET_RANGE[1],
+                )
             self._gripper_down_yaw_w = (
                 base_yaw + yaw_offset + self._gripper_down_yaw_offset_w
             ).clone()

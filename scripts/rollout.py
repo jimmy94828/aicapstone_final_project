@@ -75,6 +75,12 @@ parser = argparse.ArgumentParser(
 )
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
 parser.add_argument(
+    "--object_poses",
+    type=str,
+    default=None,
+    help="Optional per-episode object_poses.json used to reset evaluation layouts.",
+)
+parser.add_argument(
     "--step_hz", type=int, default=60, help="Environment stepping rate in Hz."
 )
 parser.add_argument("--seed", type=int, default=None, help="Seed of the environment.")
@@ -158,6 +164,7 @@ from leisaac.utils.robot_utils import (
 import leisaac  # noqa: F401
 import simulator.tasks  # noqa: F401
 from simulator.tasks.external import resolve_task
+from simulator.utils.object_poses_loader import load_episode_poses
 from simulator import FRANKA_JOINT_NAMES
 
 
@@ -460,6 +467,81 @@ def get_camera_infos(
     return camera_infos
 
 
+def _apply_episode_poses(env: ManagerBasedRLEnv, poses: dict) -> None:
+    device = env.device
+    for name, (pos, quat) in poses.items():
+        obj = env.scene[name]
+        pose_tensor = torch.tensor(
+            [[pos[0], pos[1], pos[2], quat[0], quat[1], quat[2], quat[3]]],
+            device=device,
+            dtype=torch.float32,
+        ).repeat(env.num_envs, 1)
+        obj.write_root_pose_to_sim(pose_tensor)
+        print(
+            f"  [eval pose] {name}: pos=({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f})",
+            flush=True,
+        )
+
+
+def _sync_sim_after_pose_write(env: ManagerBasedRLEnv) -> None:
+    write_data = getattr(env.scene, "write_data_to_sim", None)
+    if callable(write_data):
+        write_data()
+
+    forward = getattr(env.sim, "forward", None)
+    if callable(forward):
+        forward()
+    else:
+        env.sim.step(render=False)
+
+    update = getattr(env.scene, "update", None)
+    if callable(update):
+        update(dt=0.0)
+
+
+def _current_observations(env: ManagerBasedRLEnv, fallback_obs: dict) -> dict:
+    getter = getattr(env, "get_observations", None)
+    if callable(getter):
+        obs = getter()
+        return obs[0] if isinstance(obs, tuple) else obs
+
+    obs_manager = getattr(env, "observation_manager", None)
+    if obs_manager is not None and hasattr(obs_manager, "compute"):
+        obs = obs_manager.compute()
+        if isinstance(obs, dict) and "policy" in obs:
+            return obs
+        return {"policy": obs}
+
+    return fallback_obs
+
+
+def _reset_eval_episode(env: ManagerBasedRLEnv, episodes: list[dict], episode_index: int) -> dict:
+    print("[rollout] resetting environment...", flush=True)
+    obs_dict, _ = env.reset()
+    print("[rollout] env.reset() returned", flush=True)
+    if hasattr(env, "_dining_cleanup_last_status"):
+        setattr(env, "_dining_cleanup_last_status", None)
+
+    if episodes:
+        pose_index = (episode_index - 1) % len(episodes)
+        print(f"[rollout] applying object pose episode {pose_index + 1}/{len(episodes)}", flush=True)
+        _apply_episode_poses(env, episodes[pose_index])
+        _sync_sim_after_pose_write(env)
+        obs_dict = _current_observations(env, obs_dict)
+    return obs_dict
+
+
+def _print_task_episode_status(env: ManagerBasedRLEnv, prefix: str) -> None:
+    try:
+        from simulator.tasks.dining_cleanup.dining_cleanup_env_cfg import print_dining_cleanup_status
+
+        print_dining_cleanup_status(env, prefix=prefix)
+    except KeyError:
+        return
+    except Exception as exc:
+        print(f"{prefix} status report failed: {exc}", flush=True)
+
+
 def main():
     task_id = resolve_task(args_cli.task)
     args_cli.task = task_id
@@ -471,6 +553,19 @@ def main():
     env_cfg.use_teleop_device(teleop_device)
     env_cfg.seed = args_cli.seed if args_cli.seed is not None else int(time.time())
     env_cfg.episode_length_s = args_cli.episode_length_s
+
+    episodes = []
+    if args_cli.object_poses:
+        object_pose_cfg = getattr(env_cfg, "object_pose_cfg", None)
+        if object_pose_cfg is None:
+            raise ValueError(
+                f"Task '{task_id}' env_cfg has no 'object_pose_cfg' attribute; "
+                "cannot resolve --object_poses."
+            )
+        episodes = load_episode_poses(args_cli.object_poses, object_pose_cfg)
+        if not episodes:
+            raise ValueError(f"No status=='full' episodes found in {args_cli.object_poses}.")
+        print(f"[rollout] loaded {len(episodes)} object pose episodes from {args_cli.object_poses}", flush=True)
 
     if args_cli.eval_rounds <= 0:
         if hasattr(env_cfg.terminations, "time_out"):
@@ -489,9 +584,7 @@ def main():
     print("[rollout] warming up renderer (20 app updates)...", flush=True)
     for _ in range(20):
         simulation_app.update()
-    print("[rollout] resetting environment...", flush=True)
-    obs_dict, _ = env.reset()
-    print("[rollout] env.reset() returned", flush=True)
+    obs_dict = _reset_eval_episode(env, episodes, episode_index=1)
 
     language_instruction = args_cli.policy_language_instruction
     if language_instruction is None:
@@ -529,9 +622,10 @@ def main():
             with torch.inference_mode():
                 if controller.reset_state:
                     controller.reset()
-                    obs_dict, _ = env.reset()
                     policy.reset()
                     episode_count += 1
+                    if max_episode_count <= 0 or episode_count <= max_episode_count:
+                        obs_dict = _reset_eval_episode(env, episodes, episode_count)
                     break
 
                 policy_obs_dict = preprocess_obs_dict(
@@ -555,24 +649,35 @@ def main():
                         rate_limiter.sleep(env)
             if success:
                 print(f"[Evaluation] Episode {episode_count} is successful!")
+                _print_task_episode_status(env, f"[Evaluation] Episode {episode_count}")
                 episode_count += 1
                 success_count += 1
                 policy.reset()
+                if max_episode_count <= 0 or episode_count <= max_episode_count:
+                    obs_dict = _reset_eval_episode(env, episodes, episode_count)
                 break
             if time_out:
                 print(f"[Evaluation] Episode {episode_count} timed out!")
+                _print_task_episode_status(env, f"[Evaluation] Episode {episode_count}")
                 episode_count += 1
                 policy.reset()
+                if max_episode_count <= 0 or episode_count <= max_episode_count:
+                    obs_dict = _reset_eval_episode(env, episodes, episode_count)
                 break
         print(
             f"[Evaluation] now success rate: {success_count / (episode_count - 1)} "
             f" [{success_count}/{episode_count - 1}]"
         )
 
-    print(
-        f"[Evaluation] Final success rate: {success_count / max_episode_count:.3f} "
-        f" [{success_count}/{max_episode_count}]"
-    )
+    if max_episode_count > 0:
+        print(
+            f"[Evaluation] Final success rate: {success_count / max_episode_count:.3f} "
+            f" [{success_count}/{max_episode_count}]"
+        )
+    else:
+        evaluated = max(episode_count - 1, 0)
+        rate = success_count / evaluated if evaluated > 0 else 0.0
+        print(f"[Evaluation] Final success rate: {rate:.3f} [{success_count}/{evaluated}]")
 
     env.close()
     simulation_app.close()

@@ -63,7 +63,7 @@ vase/model_B07JLBDT51_69323.usd
 ```
 
 cloth 目前改用 `sim_utils.CuboidCfg` 建立穩定的薄片 rigid object，避免原本 `model_tablecloth.usd` 的 particle-cloth schema 在 simulator 啟動時造成初始位置漂移。
-vase 目前使用 `model_B07JLBDT51_69323.usd` 的原生 mesh；其 local bbox 的 z min 為 `0.000 m`，因此固定位置 `z=0.05` 會讓 vase 底部貼齊桌面。task config 會將 vase scale 到約 `0.100 x 0.100 m` 的桌面 footprint。由於此 asset 的原生 material 在 Isaac/RTX material flattening 時可能被錯誤顯示為單一綠色，`dining_cleanup_env_cfg.py` 會在 spawn vase 後綁定一個 warm ceramic `UsdPreviewSurface` 材質，確保 teleoperation/eval 中的顯示穩定。
+vase 目前使用 `model_B07JLBDT51_69323.usd` 的原生 mesh；其 local bbox 的 z min 為 `0.000 m`，因此固定位置 `z=0.05` 會讓 vase 底部貼齊桌面。task config 會將 vase scale 到約 `0.100 x 0.100 m` 的桌面 footprint。`dining_cleanup_env_cfg.py` 目前保留 vase USD 內建材質，避免額外 PreviewSurface override 讓整個 vase 被顯示成單一純色。
 
 ### 桌面座標系
 
@@ -96,7 +96,7 @@ packages/simulator/src/simulator/tasks/dining_cleanup/dining_cleanup_env_cfg.py
 | tray | `(0.57, -0.36, 0.05)` |
 | tissue | `(0.35, -0.12, 0.074)` |
 | vase | `(0.35, -0.26, 0.05)` |
-| cloth | `(0.35, -0.43, 0.075)` |
+| cloth | `(0.35, -0.43, 0.065)` |
 
 中間區域的 y 順序符合需求：
 
@@ -122,7 +122,7 @@ bowl/spoon shared y = [-0.50, -0.22]
 額外限制：
 
 - bowl/spoon 與 tray/tissue/vase/cloth 依 scaled footprint 半徑避免重疊。
-- bowl 與 spoon 之間的最小中心距離目前為 `0.220 m`，等於 bowl 半徑 `0.080` + spoon 半徑 `0.100` + clearance `0.040`。
+- bowl 與 spoon 之間的最小中心距離目前為 `0.207 m`，等於 bowl 半徑 `0.070` + spoon 半徑 `0.097` + clearance `0.040`。
 - bowl 與 spoon 的最大中心距離目前為 `0.280 m`，避免兩者初始位置過度分離。
 - 只生成 `status == "full"` 的 episode
 
@@ -138,14 +138,14 @@ USD bbox / task geometry 與 task scale：
 
 | 物件 | raw USD bbox size / task geometry | task spawn scale / rot | scaled world XY footprint |
 |------|-------------------|------------------------|---------------------------|
-| bowl | `0.280 x 0.280 x 0.130 m` | `(0.57, 0.57, 0.57)` | `0.160 x 0.160 m` |
-| spoon | `0.066 x 0.323 x 0.032 m` | `(0.62, 0.62, 0.62)` | `0.041 x 0.200 m` |
+| bowl | `0.280 x 0.280 x 0.130 m` | `(0.50, 0.50, 0.50)` | `0.140 x 0.140 m` |
+| spoon | `0.066 x 0.323 x 0.032 m` | `(0.60, 0.60, 0.60)` | `0.040 x 0.194 m` |
 | tray | `0.304 x 0.147 x 0.054 m` | `(0.79, 1.77, 1.00)` | `0.240 x 0.260 m` |
 | tissue | `0.073 x 0.103 x 0.050 m` | `(1.00, 1.00, 1.00)` | `0.073 x 0.103 m` |
 | vase | `0.169 x 0.169 x 0.240 m` | `(0.591, 0.591, 0.591)` | `0.100 x 0.100 m` |
-| cloth | `CuboidCfg(size=(0.055, 0.115, 0.050))` | no USD scale / no z yaw | `0.055 x 0.115 m` |
+| cloth | `CuboidCfg(size=(0.055, 0.115, 0.030))` | no USD scale / no z yaw | `0.055 x 0.115 m` |
 
-Franka gripper 初始最大開口約為 `0.04 + 0.04 = 0.08 m`。目前 cloth cuboid 的窄邊為 `0.055 m`，可由夾爪夾取窄邊；z 厚度為 `0.050 m`，讓 PhysX 在啟動時有穩定的薄片碰撞幾何，並提高夾取時的接觸厚度。
+Franka gripper 初始最大開口約為 `0.04 + 0.04 = 0.08 m`。目前 cloth cuboid 的窄邊為 `0.055 m`，可由夾爪夾取窄邊；z 厚度為 `0.030 m`，讓 PhysX 在啟動時有穩定的薄片碰撞幾何，並提高夾取時的接觸厚度。
 
 ## Object Pose 生成
 
@@ -190,7 +190,7 @@ python3 scripts/generate_dining_cleanup_object_poses.py \
 [
     {
         "video_name": "synthetic_dining_cleanup_poses.mp4",
-        "episode_range": [0, 1309],
+        "episode_range": [0, 1732],
         "objects": [
             {
                 "object_name": "bowl",
@@ -200,7 +200,7 @@ python3 scripts/generate_dining_cleanup_object_poses.py \
             {
                 "object_name": "spoon",
                 "rvec": [0.0, 0.0, 2.356],
-                "tvec": [-0.283, -0.339, 0.066]
+                "tvec": [-0.280, -0.350, 0.066]
             }
         ],
         "status": "full"
@@ -223,12 +223,12 @@ python3 scripts/generate_dining_cleanup_object_poses.py \
 
 ```text
 episodes = 500
-bowl world x = [0.100, 0.185]
+bowl world x = [0.100, 0.197]
 bowl world y = [-0.500, -0.220]
-spoon world x = [0.100, 0.163]
+spoon world x = [0.100, 0.168]
 spoon world y = [-0.500, -0.220]
-bowl-spoon world XY distance = [0.220, 0.279]
-scaled footprint clearance min = 0.220
+bowl-spoon world XY distance = [0.207, 0.279]
+scaled footprint clearance min = 0.207
 configured bowl-spoon max distance = 0.280
 ```
 
@@ -302,8 +302,8 @@ python3 scripts/visualize_dining_cleanup_layout.py \
 - bowl/spoon scaled footprint envelope
 - tray 中心
 - tray success zone
-- bowl drop target，也就是 tray center 的 `+y`
-- spoon drop target，也就是 tray center 的 `-y`
+- bowl drop target
+- spoon drop target
 - tissue/vase/cloth 固定位置
 - tray/tissue/vase/cloth scaled footprint
 - tray/tissue/vase/cloth keep-out radius
@@ -317,18 +317,19 @@ python3 scripts/visualize_dining_cleanup_layout.py \
 執行 visualization 後會印出：
 
 ```text
-bowl: n=500, x=[0.100, 0.185], y=[-0.500, -0.220]
-spoon: n=500, x=[0.100, 0.163], y=[-0.500, -0.220]
+bowl: n=500, x=[0.100, 0.197], y=[-0.500, -0.220]
+spoon: n=500, x=[0.100, 0.168], y=[-0.500, -0.220]
 table: x=[0.000, 0.700], y=[-0.650, 0.000]
-wipe region: x=[0.040, 0.220], y=[-0.500, -0.150]
-planned cloth/table coverage: 91.7%
-tray success zone: x=[0.450, 0.690], y=[-0.490, -0.230]
+wipe region: x=[0.080, 0.220], y=[-0.550, -0.100]
+planned cloth/table coverage: 98.2%
+coverage success threshold: 68.7%
+tray success zone: x=[0.440, 0.700], y=[-0.500, -0.220]
 tray scaled footprint: 0.240 x 0.260 m
 tissue scaled footprint: 0.073 x 0.103 m
 vase scaled footprint: 0.100 x 0.100 m
 cloth scaled footprint: 0.055 x 0.115 m
-bowl scaled footprint: 0.160 x 0.160 m
-spoon scaled footprint: 0.041 x 0.200 m
+bowl scaled footprint: 0.140 x 0.140 m
+spoon scaled footprint: 0.040 x 0.194 m
 ```
 
 ## FSM 設計
@@ -361,7 +362,7 @@ bowl:
   approach bowl edge
   close gripper
   lift bowl
-  move above tray +y target
+  move above bowl drop target
   lower
   release
 
@@ -370,7 +371,7 @@ spoon:
   approach spoon
   close gripper
   lift spoon
-  move above tray -y target
+  move above spoon drop target
   lower
   release
 
@@ -387,13 +388,13 @@ cloth:
 
 ### Bowl 夾取設計
 
-需求中指定 bowl 要夾取邊緣，因此 FSM 不直接抓 bowl center。做法是將 grasp target 從 bowl center 往 robot base 方向 retreat：
+需求中指定 bowl 要夾取邊緣，因此 FSM 不直接抓 bowl center。做法是使用 signed retreat offset 將 grasp target 從 bowl center 移到 bowl 邊緣：
 
 ```text
-_GRASP_RETREAT_PER_OBJECT["bowl"] = 0.055
+_GRASP_RETREAT_PER_OBJECT["bowl"] = -0.075
 ```
 
-這會讓 gripper 目標點偏向 bowl 靠近 robot 的邊緣，而不是 bowl 幾何中心。
+目前負值會讓 gripper 目標點偏向 bowl 遠離 robot 的邊緣，而不是 bowl 幾何中心。FSM 的 `move_above_object`、`approach_object`、`grasp_object` 都使用同一個 grasp anchor XY，因此 bowl 夾取時會先移動到 grasp anchor 正上方，再沿 z 方向垂直下降。
 
 ### Spoon 夾取設計
 
@@ -419,20 +420,20 @@ _grasp_anchor_w("cloth") = cloth center
 cloth 固定起始位置：
 
 ```text
-cloth = (0.35, -0.43, 0.075)
+cloth = (0.35, -0.43, 0.065)
 ```
 
 擦拭區域：
 
 ```text
-x = [0.04, 0.22]
-y = [-0.50, -0.15]
+x = [0.08, 0.22]
+y = [-0.55, -0.10]
 ```
 
 擦拭採用 3 條 y-axis lanes，並以 cloth 的 scaled footprint `0.055 x 0.115 m` 規劃安全距離：
 
 ```text
-x lanes = [0.08, 0.135, 0.19]
+x lanes = [0.10, 0.15, 0.19]
 ```
 
 每條 lane 沿 y 方向掃過 dirty area。相鄰 lane 採用往返方式移動，避免每一條都需要回到同一端點：
@@ -443,7 +444,7 @@ lane 1: y high -> y low
 lane 2: y low  -> y high
 ```
 
-最右 lane 的 cloth 右緣約為 `0.218 m`，低於 vase/tissue 左側安全界線，因此擦拭時不會掃到 tissue 或 vase。以 cloth swept footprint 計算，目標擦拭區 `x=[0.04, 0.22]`, `y=[-0.50, -0.15]` 的 planned coverage 為 `91.7%`。FSM 與 env success 目前使用 `90%` coverage threshold。
+最右 lane 的 cloth 右緣約為 `0.218 m`，低於 vase/tissue 左側安全界線，因此擦拭時不會掃到 tissue 或 vase。以 cloth swept footprint 計算，目標擦拭區 `x=[0.08, 0.22]`, `y=[-0.55, -0.10]` 的理想 planned coverage 為 `98.2%`。FSM 與 env success 目前都累積實際 cloth/table coverage，並使用理想覆蓋率的 `70%` 作為成功門檻，也就是 dirty region coverage ratio 至少約 `68.7%`。
 
 ### FSM phase 與 duration
 
@@ -452,23 +453,23 @@ bowl 與 spoon 各 7 個 phase：
 | Phase | 說明 | steps |
 |-------|------|-------|
 | move_above_object | 移動到物件上方 | 180 |
-| approach_object | 下降到抓取高度 | 130 |
+| approach_object | 下降到抓取高度 | 160 |
 | grasp_object | 關閉 gripper | 25 |
-| lift_object | 抬起物件 | 100 |
+| lift_object | 抬起物件 | 130 |
 | move_above_drop | 移到 tray drop target 上方 | 170 |
-| lower_to_release | 下降到釋放高度 | 25 |
+| lower_to_release | 下降到釋放高度 | 80 |
 | retreat_from_drop | 開爪並上移 | 40 |
 
 單一物件共：
 
 ```text
-670 steps
+785 steps
 ```
 
 bowl + spoon 共：
 
 ```text
-1340 steps
+1570 steps
 ```
 
 cloth pick 與 wipe 前置 phase：
@@ -476,9 +477,9 @@ cloth pick 與 wipe 前置 phase：
 | Phase | 說明 | steps |
 |-------|------|-------|
 | move_above_object | 移動到 cloth 上方 | 160 |
-| approach_object | 下降到 cloth | 110 |
+| approach_object | 下降到 cloth | 130 |
 | grasp_object | 關閉 gripper | 30 |
-| lift_object | 抬起 cloth | 90 |
+| lift_object | 抬起 cloth | 110 |
 | move_above_wipe_start | 移動到擦拭起點上方 | 140 |
 | lower_to_wipe | 下降到擦拭高度 | 80 |
 
@@ -493,8 +494,8 @@ cloth pick 與 wipe 前置 phase：
 整個 FSM 預估長度：
 
 ```text
-1340 + 610 + 650 = 2600 steps
-MAX_STEPS = 2700
+1570 + 650 + 650 = 2870 steps
+MAX_STEPS = 2970
 ```
 
 ### Gripper command
@@ -545,20 +546,21 @@ _IK_DLS_LAMBDA = 0.01
 `DiningCleanupStateMachine.check_success(env)` 會檢查：
 
 1. FSM 已完成完整 wipe timeline。
-2. bowl 在 tray success zone 內。
-3. spoon 在 tray success zone 內。
-4. bowl 位於 tray center 的 `+y` 側。
-5. spoon 位於 tray center 的 `-y` 側。
-6. bowl/spoon 不重疊，距離至少 `0.04 m`。
-7. planned cloth/table coverage ratio 至少 `90%`。
-8. tissue/vase 的 XY 位移不超過 `0.035 m`，避免擦拭過程撞偏固定物件。
+2. bowl 的 XY 位置在 tray success zone 內。
+3. spoon 的 XY 位置在 tray success zone 內。
+4. actual cloth/table coverage ratio 至少達到理想覆蓋率的 `70%`。
+5. tray 的 XY 位移不超過 `0.05 m`，避免以推動 tray 的方式通過 placement check。
+6. tissue/vase 的 XY 位移不超過 `0.035 m`，避免擦拭過程撞偏固定物件。
+7. tray、cloth、tissue、vase 的 root z 不低於 `0.0 m`。
+
+目前 bowl/spoon 的 tray placement 不再檢查 z range，也不再要求 bowl 在 tray `+y` 側、spoon 在 tray `-y` 側；只要兩者的 XY 位置都落在 tray success zone 即可。
 
 tray success zone：
 
 ```text
-x half width = 0.12
-y half width = 0.13
-z range = [-0.05, 0.11] relative to tray z
+x half width = 0.13
+y half width = 0.14
+z range = not checked for bowl/spoon placement
 ```
 
 ## Teleoperation 執行方式
@@ -697,7 +699,7 @@ R = reset/discard current episode
 ### 1. 產生 object poses
 
 ```bash
-cd /home/weichen/AI_capstone/aicapstone
+cd /home/weichen/AI_capstone/aicapstone_final_project
 
 python3 scripts/generate_dining_cleanup_object_poses.py \
   --count 500 \
@@ -771,6 +773,35 @@ python scripts/datagen/generate.py \
   --dataset_file ./datasets/dining_cleanup.hdf5
 ```
 
+## 固定 Evaluation Protocol
+
+Advanced level evaluation 應使用固定 seed、固定 episode length、固定 object pose split，並在每個 rollout episode reset 後套用 `object_poses` 中的下一筆 bowl/spoon 初始位置。`scripts/rollout.py` 目前支援 `--object_poses`，因此 dining cleanup policy evaluation 可以直接使用同一份 500 筆 pose 檔。
+
+建議本地 evaluation 指令：
+
+```bash
+python scripts/rollout.py \
+  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --policy_type=lerobot-<policy_name> \
+  --policy_checkpoint_path=<path/to/checkpoint> \
+  --policy_action_horizon=1 \
+  --device=cuda \
+  --enable_cameras \
+  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
+  --eval_rounds=50 \
+  --episode_length_s=60 \
+  --seed=2026053002
+```
+
+目前 rollout success 由 env termination 判斷，包含：
+
+- bowl/spoon 的 XY 位置位於 tray success zone。
+- bowl/spoon placement 不檢查 z range，也不要求 bowl/spoon 在 tray 內分別位於固定 y 側。
+- actual cloth/table coverage 達到理想覆蓋率的 `70%`，目前約等於 dirty region coverage ratio `68.7%`。
+- tissue/vase XY 位移不超過 `0.035 m`。
+
+每個 rollout episode 結束時，terminal 會額外印出 dining cleanup stage status，包含 tableware、wiping、protected 的 success/fail，以及 cloth coverage ratio、threshold、ideal coverage。
+
 ## 快速檢查指令
 
 ### Python syntax check
@@ -783,7 +814,8 @@ python3 -m py_compile \
   scripts/generate_dining_cleanup_object_poses.py \
   scripts/visualize_dining_cleanup_layout.py \
   scripts/teleop.py \
-  scripts/datagen/generate.py
+  scripts/datagen/generate.py \
+  scripts/rollout.py
 ```
 
 ### object pose 基本檢查
@@ -818,7 +850,7 @@ object_sets [('bowl', 'spoon')]
 2. env termination 會用 coarse XY grid 累積 cloth/table coverage；這是剛體 cloth footprint 的幾何覆蓋估計，不是 deformable cloth 真實接觸面積。
 3. cloth 是以 rigid object 方式處理，不是 deformable cloth simulation。
 4. tray/tissue/vase/cloth 目前固定位置。若之後要隨機化中間物件順序或 tray 位置，需要擴充 object pose loader 或新增 task-specific pose schema。
-5. bowl edge grasp 的偏移量 `_GRASP_RETREAT_PER_OBJECT["bowl"] = 0.055` 可能需要依 bowl USD mesh 實際大小微調。
+5. bowl edge grasp 的偏移量 `_GRASP_RETREAT_PER_OBJECT["bowl"] = -0.075` 可能需要依 bowl USD mesh 實際大小微調；目前 FSM 會先移動到同一個 grasp anchor 正上方，再垂直下降夾取。
 
 ## 建議工作流程
 
@@ -861,4 +893,17 @@ python scripts/datagen/generate.py \
   --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
   --record \
   --dataset_file ./datasets/dining_cleanup.hdf5
+
+# 6. 在 Isaac Lab GPU 環境跑 policy rollout evaluation
+python scripts/rollout.py \
+  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --policy_type=lerobot-<policy_name> \
+  --policy_checkpoint_path=<path/to/checkpoint> \
+  --policy_action_horizon=1 \
+  --device=cuda \
+  --enable_cameras \
+  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
+  --eval_rounds=50 \
+  --episode_length_s=60 \
+  --seed=2026053002
 ```

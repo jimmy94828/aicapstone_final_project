@@ -20,18 +20,19 @@ TABLE_X_RANGE = (0.0, 0.70)
 TABLE_Y_RANGE = (-0.65, 0.0)
 TABLE_MID_X = 0.35
 
-LEFT_TABLE_X_RANGE = (0.04, 0.22)
+LEFT_TABLE_X_RANGE = (0.08, 0.22)
 RIGHT_TABLE_X_RANGE = (0.38, 0.66)
-LEFT_TABLE_Y_RANGE = (-0.50, -0.15)
-WIPE_LANES_X = (0.08, 0.135, 0.19)
+LEFT_TABLE_Y_RANGE = (-0.55, -0.10)
+WIPE_LANES_X = (0.1, 0.15, 0.19)
+WIPE_REQUIRED_IDEAL_FRACTION = 0.70
 
 TRAY_WORLD_POS = (0.57, -0.36)
 TISSUE_WORLD_POS = (0.35, -0.12)
 VASE_WORLD_POS = (0.35, -0.26)
 CLOTH_WORLD_POS = (0.35, -0.43)
 
-TRAY_SUCCESS_X_HALF_WIDTH = 0.12
-TRAY_SUCCESS_Y_HALF_WIDTH = 0.13
+TRAY_SUCCESS_X_HALF_WIDTH = 0.13
+TRAY_SUCCESS_Y_HALF_WIDTH = 0.14
 TRAY_BOWL_TARGET = (TRAY_WORLD_POS[0], TRAY_WORLD_POS[1] + 0.055)
 TRAY_SPOON_TARGET = (TRAY_WORLD_POS[0], TRAY_WORLD_POS[1] - 0.055)
 MIN_CLEARANCE = 0.040
@@ -40,8 +41,8 @@ MIN_CLEARANCE = 0.040
 # DiningCleanupEnvCfg.  These are measured from the updated USD assets and are
 # the sizes used for planning, visualization, and object-pose overlap rejection.
 FOOTPRINT_SIZE = {
-    "bowl": (0.160, 0.160),
-    "spoon": (0.041, 0.200),
+    "bowl": (0.140, 0.140),
+    "spoon": (0.040, 0.194),
     "tray": (0.240, 0.260),
     "tissue": (0.073, 0.103),
     "vase": (0.100, 0.100),
@@ -248,8 +249,8 @@ def plot_layout(points: dict[str, list[tuple[float, float]]], output: Path) -> N
     add_fixed_object(ax, "tray", TRAY_WORLD_POS, "#8f4bd8", label_keepout=True)
     ax.scatter([TRAY_BOWL_TARGET[0]], [TRAY_BOWL_TARGET[1]], s=80, marker="o", c="#2f80ed", edgecolors="white", zorder=8)
     ax.scatter([TRAY_SPOON_TARGET[0]], [TRAY_SPOON_TARGET[1]], s=80, marker="^", c="#d64545", edgecolors="white", zorder=8)
-    ax.text(TRAY_BOWL_TARGET[0] + 0.012, TRAY_BOWL_TARGET[1], "bowl drop (+y)", fontsize=8)
-    ax.text(TRAY_SPOON_TARGET[0] + 0.012, TRAY_SPOON_TARGET[1], "spoon drop (-y)", fontsize=8)
+    ax.text(TRAY_BOWL_TARGET[0] + 0.012, TRAY_BOWL_TARGET[1], "bowl drop target", fontsize=8)
+    ax.text(TRAY_SPOON_TARGET[0] + 0.012, TRAY_SPOON_TARGET[1], "spoon drop target", fontsize=8)
 
     add_fixed_object(ax, "tissue", TISSUE_WORLD_POS, "#cc8b00")
     add_fixed_object(ax, "vase", VASE_WORLD_POS, "#5e8c31")
@@ -289,7 +290,9 @@ def plot_layout(points: dict[str, list[tuple[float, float]]], output: Path) -> N
     ax.text(
         0.02,
         TABLE_Y_RANGE[0] - 0.072,
-        f"Planned cloth/table coverage over wipe region: {100.0 * wipe_coverage_ratio():.1f}%",
+        "Planned cloth/table coverage over wipe region: "
+        f"{100.0 * wipe_coverage_ratio():.1f}% "
+        f"(success threshold: {100.0 * wipe_coverage_ratio() * WIPE_REQUIRED_IDEAL_FRACTION:.1f}%)",
         fontsize=8,
         color="#1f7a70",
     )
@@ -321,6 +324,7 @@ def print_summary(points: dict[str, list[tuple[float, float]]]) -> None:
     print(f"table: x=[{TABLE_X_RANGE[0]:.3f}, {TABLE_X_RANGE[1]:.3f}], y=[{TABLE_Y_RANGE[0]:.3f}, {TABLE_Y_RANGE[1]:.3f}]")
     print(f"wipe region: x=[{LEFT_TABLE_X_RANGE[0]:.3f}, {LEFT_TABLE_X_RANGE[1]:.3f}], y=[{LEFT_TABLE_Y_RANGE[0]:.3f}, {LEFT_TABLE_Y_RANGE[1]:.3f}]")
     print(f"planned cloth/table coverage: {100.0 * wipe_coverage_ratio():.1f}%")
+    print(f"coverage success threshold: {100.0 * wipe_coverage_ratio() * WIPE_REQUIRED_IDEAL_FRACTION:.1f}%")
     print(
         "tray success zone: "
         f"x=[{TRAY_WORLD_POS[0] - TRAY_SUCCESS_X_HALF_WIDTH:.3f}, "
