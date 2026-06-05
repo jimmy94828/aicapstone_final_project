@@ -223,13 +223,13 @@ SPOON_FIXED_WORLD_ROT: tuple[float, float, float, float] = (
 TABLE_X_RANGE: tuple[float, float] = (0.0, 0.70)
 TABLE_Y_RANGE: tuple[float, float] = (-0.65, 0.0)
 TABLE_SURFACE_Z: float = 0.05
-LEFT_TABLE_X_RANGE: tuple[float, float] = (0.08, 0.22)
+LEFT_TABLE_X_RANGE: tuple[float, float] = (0.0, 0.22)
 RIGHT_TABLE_X_RANGE: tuple[float, float] = (0.38, 0.66)
 LEFT_TABLE_Y_RANGE: tuple[float, float] = (-0.50, -0.10)
 
 # ── Single source of truth for wipe lanes ────────────────────────────────────
 # state_machine.py imports this constant; do NOT redefine it there.
-WIPE_LANES_X: tuple[float, ...] = (0.08, 0.13, 0.18, 0.22)
+WIPE_LANES_X: tuple[float, ...] = (0.21, 0.18, 0.15, 0.11 , 0.07)
 
 WIPE_FINAL_XY: tuple[float, float] = (0.2, LEFT_TABLE_Y_RANGE[1])
 WIPE_REQUIRED_IDEAL_FRACTION: float = 0.70
@@ -398,7 +398,7 @@ class DiningCleanupSceneCfg(SingleArmFrankaTaskSceneCfg):
                 restitution=0.0,
             ),
             visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=(0.08, 0.12, 0.85),
+                diffuse_color=(1.0, 0.84, 0.0),
                 roughness=0.8,
             ),
         ),
