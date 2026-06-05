@@ -348,7 +348,8 @@ class LeRobotSyncPolicy:
     def reset(self):
         policy_reset = getattr(self.policy, "reset", None)
         if callable(policy_reset):
-            policy_reset()
+            with torch.inference_mode():
+                policy_reset()
 
     def _build_lerobot_features(
         self, camera_infos: dict[str, tuple[int, int]]
@@ -414,6 +415,8 @@ class LeRobotSyncPolicy:
     def _predict_lerobot_actions(self, observation: dict[str, Any]) -> torch.Tensor:
         with torch.inference_mode():
             action = self.policy.select_action(observation)
+        if isinstance(action, torch.Tensor):
+            action = action.clone()
         return self.postprocessor(action)
 
     def _convert_actions_to_leisaac(self, action_tensor: torch.Tensor) -> np.ndarray:
@@ -619,7 +622,7 @@ def main():
         print(f"[Evaluation] Evaluating episode {episode_count}...")
         success, time_out = False, False
         while simulation_app.is_running():
-            with torch.inference_mode():
+            with torch.no_grad():
                 if controller.reset_state:
                     controller.reset()
                     policy.reset()
