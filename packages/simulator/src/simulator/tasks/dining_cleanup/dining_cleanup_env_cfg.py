@@ -34,7 +34,7 @@ BOWL_USD_PATH = DINING_OBJECTS_ROOT / "bowl" / "model_BalandaBowl_69323.usd"
 SPOON_USD_PATH = DINING_OBJECTS_ROOT / "spoon" / "model_Kitchen_Spoon_B008H2JLP8_LargeWooden_69323.usd"
 TRAY_USD_PATH = DINING_OBJECTS_ROOT / "tray" / "model_WhiteUtensilTray_69323.usd"
 TISSUE_USD_PATH = DINING_OBJECTS_ROOT / "tissue" / "model_tissue_001_69323.usd"
-VASE_USD_PATH = DINING_OBJECTS_ROOT / "vase" / "model_Vase_B09ZGXSVTT_White_TU_69323.usd"
+VASE_USD_PATH = DINING_OBJECTS_ROOT / "vase" / "model_B07JLBDT51_69323.usd"
 
 BOWL_SCALE: tuple[float, float, float] = (0.5, 0.5, 0.5)
 SPOON_SCALE: tuple[float, float, float] = (0.6, 0.6, 0.6)
