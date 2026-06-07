@@ -25,6 +25,10 @@ from simulator.tasks.template.single_arm_franka_cfg import (
     SingleArmFrankaTerminationsCfg,
 )
 
+import math as _math
+import numpy as _np
+
+
 DINING_OBJECTS_ROOT = ASSETS_ROOT / "scenes" / "dining_room" / "objects"
 BOWL_USD_PATH = DINING_OBJECTS_ROOT / "bowl" / "model_BalandaBowl_69323.usd"
 SPOON_USD_PATH = DINING_OBJECTS_ROOT / "spoon" / "model_Kitchen_Spoon_B008H2JLP8_LargeWooden_69323.usd"
@@ -36,8 +40,6 @@ BOWL_SCALE: tuple[float, float, float] = (0.5, 0.5, 0.5)
 SPOON_SCALE: tuple[float, float, float] = (0.6, 0.6, 0.6)
 TRAY_SCALE: tuple[float, float, float] = (0.79, 1.77, 1.0)
 TISSUE_SCALE: tuple[float, float, float] = (1.0, 1.0, 1.0)
-# model_B07JLBDT51_69323.usd has an XY bbox of 0.169244 m; scale it to a
-# 0.100 m x 0.100 m tabletop footprint.
 VASE_SCALE_FACTOR: float = 0.100 / 0.169244
 VASE_SCALE: tuple[float, float, float] = (VASE_SCALE_FACTOR, VASE_SCALE_FACTOR, VASE_SCALE_FACTOR)
 VASE_DIFFUSE_COLOR: tuple[float, float, float] = (0.78, 0.74, 0.66)
@@ -52,6 +54,69 @@ COLLISION_PROPS = CollisionPropertiesCfg(
     contact_offset=0.005,
     rest_offset=0.0,
 )
+
+
+def _create_wipe_vis_mesh(
+    stage,
+    mesh_path: str,
+    x_range: tuple[float, float],
+    y_range: tuple[float, float],
+    x_bins: int,
+    y_bins: int,
+    z: float,
+) -> None:
+    """Create a static subdivided quad mesh for wipe-coverage visualization.
+
+    One face per grid cell; vertex colors are updated at runtime via
+    primvars:displayColor (uniform interpolation = one color per face).
+    Physics is disabled; the prim is visual-only.
+    """
+    from pxr import Vt
+
+    x_min, x_max = x_range
+    y_min, y_max = y_range
+    dx = (x_max - x_min) / x_bins
+    dy = (y_max - y_min) / y_bins
+
+    nx, ny = x_bins + 1, y_bins + 1
+    points = []
+    for i in range(nx):
+        for j in range(ny):
+            points.append(Gf.Vec3f(x_min + i * dx, y_min + j * dy, z))
+
+    face_vertex_counts = []
+    face_vertex_indices = []
+    for i in range(x_bins):
+        for j in range(y_bins):
+            v00 = i * ny + j
+            v10 = (i + 1) * ny + j
+            v11 = (i + 1) * ny + (j + 1)
+            v01 = i * ny + (j + 1)
+            face_vertex_counts.append(4)
+            face_vertex_indices.extend([v00, v10, v11, v01])
+
+    mesh = UsdGeom.Mesh.Define(stage, mesh_path)
+    mesh.GetPointsAttr().Set(Vt.Vec3fArray(points))
+    mesh.GetFaceVertexCountsAttr().Set(Vt.IntArray(face_vertex_counts))
+    mesh.GetFaceVertexIndicesAttr().Set(Vt.IntArray(face_vertex_indices))
+    mesh.GetDoubleSidedAttr().Set(True)
+
+    # ── Use primvar API exclusively (uniform = one value per face) ──────
+    # Do NOT also call GetDisplayColorAttr().Set() separately; that path
+    # bypasses interpolation metadata and causes conflicts at runtime.
+    num_faces = x_bins * y_bins
+    init_colors = Vt.Vec3fArray([Gf.Vec3f(0.36, 0.25, 0.20)] * num_faces)
+    primvars_api = UsdGeom.PrimvarsAPI(mesh)
+    color_primvar = primvars_api.CreatePrimvar(
+        "displayColor",
+        Sdf.ValueTypeNames.Color3fArray,
+        UsdGeom.Tokens.uniform,   # one value per face
+    )
+    color_primvar.Set(init_colors)
+
+    prim = mesh.GetPrim()
+    prim.SetInstanceable(False)
+    UsdGeom.Imageable(prim).GetPurposeAttr().Set(UsdGeom.Tokens.default_)
 
 
 def _ensure_rigid_object_schemas(root_prim: Usd.Prim) -> None:
@@ -86,7 +151,6 @@ def _bind_preview_surface_material(
     roughness: float = 0.55,
     metallic: float = 0.0,
 ) -> None:
-    """Bind a simple USD PreviewSurface material on top of imported asset materials."""
     stage = root_prim.GetStage()
     looks_path = root_prim.GetPath().AppendChild("Looks")
     UsdGeom.Scope.Define(stage, looks_path)
@@ -113,7 +177,6 @@ def _spawn_rigid_usd(
     orientation: tuple[float, float, float, float] | None = None,
     **kwargs,
 ) -> Usd.Prim:
-    """Spawn a USD file and make non-physics USDs usable as RigidObject assets."""
     rigid_props = cfg.rigid_props
     collision_props = cfg.collision_props
     mass_props = cfg.mass_props
@@ -129,13 +192,6 @@ def _spawn_rigid_usd(
         cfg.mass_props = mass_props
 
     _ensure_rigid_object_schemas(root_prim)
-    # if root_prim.GetName() == "vase":
-    #     _bind_preview_surface_material(
-    #         root_prim,
-    #         name="warm_ceramic_vase_material",
-    #         diffuse_color=VASE_DIFFUSE_COLOR,
-    #         roughness=0.62,
-    #     )
 
     if rigid_props is not None:
         sim_schemas.modify_rigid_body_properties(prim_path, rigid_props)
@@ -145,9 +201,7 @@ def _spawn_rigid_usd(
         sim_schemas.modify_mass_properties(prim_path, mass_props)
     return root_prim
 
-# UMI/object_poses entries.  Only bowl/spoon are randomized per replay episode;
-# tray, tissue, vase, and cloth are part of the task scene with fixed initial
-# placement so the cleanup target and obstacle layout stay consistent.
+
 TAG_TO_OBJECT: dict[int, str] = {1: "bowl", 2: "spoon"}
 ANCHOR_TAG_ID: int = 0
 ANCHOR_WORLD_POSE: tuple[float, float, float] = (0.40, 0.10, 0.0)
@@ -156,7 +210,6 @@ OBJECT_ROLL: float = 0.0
 OBJECT_PITCH: float = 0.0
 PER_OBJECT_YAW_OFFSET: dict[str, float] = {
     "bowl": 0.0,
-    # USD heading correction plus an additional 180-degree rotation requested for placement.
     "spoon": 3.0 * math.pi / 2.0,
 }
 SPOON_FIXED_WORLD_YAW: float = math.pi / 2.0
@@ -167,21 +220,21 @@ SPOON_FIXED_WORLD_ROT: tuple[float, float, float, float] = (
     math.sin(0.5 * SPOON_FIXED_WORLD_YAW),
 )
 
-# Dining-room table footprint in task/world XY is approximately
-# x=[0.0, 0.70], y=[-0.65, 0.0].  For this advanced task we use the convention
-# requested in the project proposal: +x is the Franka-view right side, -x is
-# the Franka-view left side.
 TABLE_X_RANGE: tuple[float, float] = (0.0, 0.70)
 TABLE_Y_RANGE: tuple[float, float] = (-0.65, 0.0)
 TABLE_SURFACE_Z: float = 0.05
-LEFT_TABLE_X_RANGE: tuple[float, float] = (0.08, 0.22)
+LEFT_TABLE_X_RANGE: tuple[float, float] = (0.0, 0.22)
 RIGHT_TABLE_X_RANGE: tuple[float, float] = (0.38, 0.66)
-LEFT_TABLE_Y_RANGE: tuple[float, float] = (-0.55, -0.10)
-WIPE_LANES_X: tuple[float, ...] = (0.1, 0.15, 0.19)
-WIPE_FINAL_XY: tuple[float, float] = (0.19, LEFT_TABLE_Y_RANGE[1])
+LEFT_TABLE_Y_RANGE: tuple[float, float] = (-0.50, -0.10)
+
+# ── Single source of truth for wipe lanes ────────────────────────────────────
+# state_machine.py imports this constant; do NOT redefine it there.
+WIPE_LANES_X: tuple[float, ...] = (0.21, 0.18, 0.15, 0.11 , 0.07)
+
+WIPE_FINAL_XY: tuple[float, float] = (0.2, LEFT_TABLE_Y_RANGE[1])
 WIPE_REQUIRED_IDEAL_FRACTION: float = 0.70
 WIPE_COVERAGE_RESOLUTION: float = 0.01
-WIPE_CONTACT_Z_RANGE: tuple[float, float] = (0.03, 0.13)
+WIPE_CONTACT_Z_RANGE: tuple[float, float] = (0.03, 0.09)
 STATIC_OBJECT_XY_TOL: float = 0.035
 TRAY_SUCCESS_X_HALF_WIDTH: float = 0.13
 TRAY_SUCCESS_Y_HALF_WIDTH: float = 0.14
@@ -211,17 +264,24 @@ def _rect_union_area(rects: list[tuple[float, float, float, float]]) -> float:
 
 
 def _planned_wipe_coverage_ratio() -> float:
+    """Compute the fraction of the wipe region covered by the planned lanes.
+
+    Each lane sweeps the full y extent of LEFT_TABLE_Y_RANGE, so the covered
+    rectangle for lane at x is:
+        x: [lane_x - half_x, lane_x + half_x]  clamped to [x_min, x_max]
+        y: [y_min, y_max]                        (full sweep, no y clamp needed)
+    """
     x_min, x_max = LEFT_TABLE_X_RANGE
     y_min, y_max = LEFT_TABLE_Y_RANGE
     half_x = 0.5 * CLOTH_FOOTPRINT_SIZE[0]
-    half_y = 0.5 * CLOTH_FOOTPRINT_SIZE[1]
+
     rects: list[tuple[float, float, float, float]] = []
     for lane_x in WIPE_LANES_X:
         rect = (
             max(x_min, lane_x - half_x),
-            max(y_min, y_min - half_y),
+            y_min,                          # FIX: lane sweeps full y range
             min(x_max, lane_x + half_x),
-            min(y_max, y_max + half_y),
+            y_max,                          # FIX: no bogus half_y clamp
         )
         if rect[2] > rect[0] and rect[3] > rect[1]:
             rects.append(rect)
@@ -333,12 +393,12 @@ class DiningCleanupSceneCfg(SingleArmFrankaTaskSceneCfg):
             collision_props=COLLISION_PROPS,
             mass_props=MassPropertiesCfg(mass=0.03),
             physics_material=sim_utils.RigidBodyMaterialCfg(
-                  static_friction=0.0,
-                  dynamic_friction=0.0,
-                  restitution=0.0,
+                static_friction=0.0,
+                dynamic_friction=0.0,
+                restitution=0.0,
             ),
             visual_material=sim_utils.PreviewSurfaceCfg(
-                diffuse_color=(0.08, 0.12, 0.85),
+                diffuse_color=(1.0, 0.84, 0.0),
                 roughness=0.8,
             ),
         ),
@@ -355,8 +415,6 @@ def dining_cleanup_success(
     vase_cfg: SceneEntityCfg,
     tray_x_half_width: float,
     tray_y_half_width: float,
-    cloth_final_xy: tuple[float, float],
-    cloth_final_tol: float,
     wipe_x_range: tuple[float, float],
     wipe_y_range: tuple[float, float],
     cloth_xy_size: tuple[float, float],
@@ -367,11 +425,6 @@ def dining_cleanup_success(
     vase_initial_xy: tuple[float, float],
     static_object_xy_tol: float,
 ) -> torch.Tensor:
-    """Termination proxy for the cleanup task.
-
-    Bowl/spoon success is based on relaxed tray XY containment only.  Their z
-    values and relative ordering inside the tray are intentionally ignored.
-    """
     status = _dining_cleanup_status(
         env,
         bowl_cfg=bowl_cfg,
@@ -382,8 +435,6 @@ def dining_cleanup_success(
         vase_cfg=vase_cfg,
         tray_x_half_width=tray_x_half_width,
         tray_y_half_width=tray_y_half_width,
-        cloth_final_xy=cloth_final_xy,
-        cloth_final_tol=cloth_final_tol,
         wipe_x_range=wipe_x_range,
         wipe_y_range=wipe_y_range,
         cloth_xy_size=cloth_xy_size,
@@ -408,8 +459,6 @@ def _dining_cleanup_status(
     vase_cfg: SceneEntityCfg,
     tray_x_half_width: float,
     tray_y_half_width: float,
-    cloth_final_xy: tuple[float, float],
-    cloth_final_tol: float,
     wipe_x_range: tuple[float, float],
     wipe_y_range: tuple[float, float],
     cloth_xy_size: tuple[float, float],
@@ -442,11 +491,17 @@ def _dining_cleanup_status(
         torch.abs(spoon_pos[:, 0] - tray_pos[:, 0]) <= tray_x_half_width,
         torch.abs(spoon_pos[:, 1] - tray_pos[:, 1]) <= tray_y_half_width,
     )
+    
     tableware_done = torch.logical_and(bowl_in_tray_xy, spoon_in_tray_xy)
 
-    final_xy = torch.tensor(cloth_final_xy, dtype=cloth_pos.dtype, device=cloth_pos.device)
-    cloth_dist = torch.norm(cloth_pos[:, :2] - final_xy, dim=1)
-    cloth_final_done = cloth_dist <= cloth_final_tol
+    # final_xy = torch.tensor(cloth_final_xy, dtype=cloth_pos.dtype, device=cloth_pos.device)
+    # cloth_dist = torch.norm(cloth_pos[:, :2] - final_xy, dim=1)
+    # cloth_final_done = cloth_dist <= cloth_final_tol
+
+    cloth_in_tray_xy = torch.logical_and(
+        torch.abs(cloth_pos[:, 0] - tray_pos[:, 0]) <= tray_x_half_width,
+        torch.abs(cloth_pos[:, 1] - tray_pos[:, 1]) <= tray_y_half_width,
+    )
 
     coverage_ratio = _update_wipe_coverage_ratio(
         env,
@@ -458,7 +513,7 @@ def _dining_cleanup_status(
         contact_z_range=wipe_contact_z_range,
     )
     coverage_done = coverage_ratio >= wipe_coverage_threshold
-    wiping_done = torch.logical_and(cloth_final_done, coverage_done)
+    wiping_done = torch.logical_and(cloth_in_tray_xy, coverage_done)
 
     tissue_initial = torch.tensor(tissue_initial_xy, dtype=tissue_pos.dtype, device=tissue_pos.device)
     vase_initial = torch.tensor(vase_initial_xy, dtype=vase_pos.dtype, device=vase_pos.device)
@@ -476,7 +531,7 @@ def _dining_cleanup_status(
         "bowl_xy": bowl_in_tray_xy,
         "spoon_xy": spoon_in_tray_xy,
         "tableware": tableware_done,
-        "cloth_final": cloth_final_done,
+        "cloth_xy": cloth_in_tray_xy,
         "coverage": coverage_done,
         "wiping": wiping_done,
         "tissue_stable": tissue_stable,
@@ -490,7 +545,6 @@ def _dining_cleanup_status(
 
 
 def print_dining_cleanup_status(env, prefix: str = "[DiningCleanup Eval]") -> None:
-    """Print one end-of-episode success breakdown for dining cleanup."""
     status = getattr(env, "_dining_cleanup_last_status", None)
     if status is None:
         status = _dining_cleanup_status(
@@ -503,8 +557,8 @@ def print_dining_cleanup_status(env, prefix: str = "[DiningCleanup Eval]") -> No
             vase_cfg=SceneEntityCfg("vase"),
             tray_x_half_width=TRAY_SUCCESS_X_HALF_WIDTH,
             tray_y_half_width=TRAY_SUCCESS_Y_HALF_WIDTH,
-            cloth_final_xy=WIPE_FINAL_XY,
-            cloth_final_tol=0.12,
+            # cloth_final_xy=WIPE_FINAL_XY,
+            # cloth_final_tol=0.12,
             wipe_x_range=LEFT_TABLE_X_RANGE,
             wipe_y_range=LEFT_TABLE_Y_RANGE,
             cloth_xy_size=CLOTH_FOOTPRINT_SIZE,
@@ -525,18 +579,30 @@ def _print_dining_cleanup_status(prefix: str, status: dict[str, torch.Tensor]) -
     coverage_values = status["coverage_ratio"].detach().cpu().tolist()
     coverage_text = ", ".join(f"{value:.3f}" for value in coverage_values)
     print(
-        f"{prefix} stage status: "
-        f"tableware={word('tableware')} "
-        f"(bowl_xy={word('bowl_xy')}, spoon_xy={word('spoon_xy')}), "
-        f"wiping={word('wiping')} "
-        f"(cloth_final={word('cloth_final')}, coverage={word('coverage')}, "
-        f"coverage_ratio={coverage_text}, threshold={WIPE_COVERAGE_THRESHOLD:.3f}, "
-        f"ideal={WIPE_IDEAL_COVERAGE_RATIO:.3f}, required={WIPE_REQUIRED_IDEAL_FRACTION:.0%}), "
-        f"protected={word('protected')} "
-        f"(tissue={word('tissue_stable')}, vase={word('vase_stable')}), "
-        f"overall={word('overall')}",
-        flush=True,
-    )
+    "\n".join(
+        [
+            f"{prefix} Stage Status",
+            f"  Tableware : {word('tableware')}",
+            f"        Bowl XY   : {word('bowl_xy')}",
+            f"        Spoon XY  : {word('spoon_xy')}",
+            "",
+            f"  Wiping    : {word('wiping')}",
+            f"        Cloth XY  : {word('cloth_xy')}",
+            f"        Coverage  : {word('coverage')}",
+            f"        Ratio     : {coverage_text}",
+            f"        Threshold : {WIPE_COVERAGE_THRESHOLD:.3f}",
+            f"        Ideal     : {WIPE_IDEAL_COVERAGE_RATIO:.3f}",
+            f"        Required  : {WIPE_REQUIRED_IDEAL_FRACTION:.0%}",
+            "",
+            f"  Protected : {word('protected')}",
+            f"        Tissue    : {word('tissue_stable')}",
+            f"        Vase      : {word('vase_stable')}",
+            "",
+            f"Overall   : {word('overall')}",
+        ]
+    ),
+    flush=True,
+)
 
 
 def _update_wipe_coverage_ratio(
@@ -611,8 +677,8 @@ class TerminationsCfg(SingleArmFrankaTerminationsCfg):
             "vase_cfg": SceneEntityCfg("vase"),
             "tray_x_half_width": TRAY_SUCCESS_X_HALF_WIDTH,
             "tray_y_half_width": TRAY_SUCCESS_Y_HALF_WIDTH,
-            "cloth_final_xy": WIPE_FINAL_XY,
-            "cloth_final_tol": 0.12,
+            # "cloth_final_xy": WIPE_FINAL_XY,
+            # "cloth_final_tol": 0.12,
             "wipe_x_range": LEFT_TABLE_X_RANGE,
             "wipe_y_range": LEFT_TABLE_Y_RANGE,
             "cloth_xy_size": CLOTH_FOOTPRINT_SIZE,
@@ -670,3 +736,9 @@ class DiningCleanupEnvCfg(SingleArmFrankaTaskEnvCfg):
             per_object_yaw_offset=PER_OBJECT_YAW_OFFSET,
             use_fixed_yaw=False,
         )
+
+        _WIPE_VIS_X_BINS: int = max(1, _math.ceil((LEFT_TABLE_X_RANGE[1] - LEFT_TABLE_X_RANGE[0]) / WIPE_COVERAGE_RESOLUTION))
+        _WIPE_VIS_Y_BINS: int = max(1, _math.ceil((LEFT_TABLE_Y_RANGE[1] - LEFT_TABLE_Y_RANGE[0]) / WIPE_COVERAGE_RESOLUTION))
+
+        self._wipe_vis_mesh_x_bins = _WIPE_VIS_X_BINS
+        self._wipe_vis_mesh_y_bins = _WIPE_VIS_Y_BINS

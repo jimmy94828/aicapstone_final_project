@@ -125,6 +125,14 @@ parser.add_argument(
     action="store_true",
     help="Print observation and action tensor shapes around each local LeRobot inference call.",
 )
+parser.add_argument(
+    "--show_wipe_mesh",
+    action="store_true",
+    help=(
+        "Create and update the wipe-coverage visualization mesh in the USD stage. "
+        "Mirrors the mesh maintained by the DiningCleanup FSM during data generation."
+    ),
+)
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -545,6 +553,92 @@ def _print_task_episode_status(env: ManagerBasedRLEnv, prefix: str) -> None:
         print(f"{prefix} status report failed: {exc}", flush=True)
 
 
+# ---------------------------------------------------------------------------
+# Wipe-coverage visualization mesh helpers
+# (mirrors DiningCleanupStateMachine.setup() / _sync_wipe_vis())
+# ---------------------------------------------------------------------------
+
+def _init_wipe_vis_mesh(env) -> None:
+    """Create the wipe-coverage visualisation mesh for every env in the stage.
+
+    Reads geometry constants from dining_cleanup_env_cfg so the mesh matches
+    exactly what the FSM creates during data generation.
+    """
+    try:
+        from simulator.tasks.dining_cleanup.dining_cleanup_env_cfg import (
+            LEFT_TABLE_X_RANGE,
+            LEFT_TABLE_Y_RANGE,
+            WIPE_COVERAGE_RESOLUTION,
+            _create_wipe_vis_mesh,
+        )
+    except Exception as exc:
+        print(f"[rollout][wipe_mesh] could not import mesh helpers: {exc}", flush=True)
+        return
+
+    import math
+
+    stage = env.sim.stage
+    x_bins = max(1, math.ceil((LEFT_TABLE_X_RANGE[1] - LEFT_TABLE_X_RANGE[0]) / WIPE_COVERAGE_RESOLUTION))
+    y_bins = max(1, math.ceil((LEFT_TABLE_Y_RANGE[1] - LEFT_TABLE_Y_RANGE[0]) / WIPE_COVERAGE_RESOLUTION))
+
+    # Cache bin counts on the env for the per-step sync to reuse.
+    env._wipe_vis_x_bins = x_bins
+    env._wipe_vis_y_bins = y_bins
+
+    for idx in range(env.num_envs):
+        origin = env.scene.env_origins[idx]
+        ox, oy = float(origin[0]), float(origin[1])
+        mesh_path = f"/World/envs/env_{idx}/Scene/wipe_vis_plane"
+        if not stage.GetPrimAtPath(mesh_path).IsValid():
+            _create_wipe_vis_mesh(
+                stage,
+                mesh_path,
+                x_range=(ox + LEFT_TABLE_X_RANGE[0], ox + LEFT_TABLE_X_RANGE[1]),
+                y_range=(oy + LEFT_TABLE_Y_RANGE[0], oy + LEFT_TABLE_Y_RANGE[1]),
+                x_bins=x_bins,
+                y_bins=y_bins,
+                z=0.045,
+            )
+
+    print(
+        f"[rollout][wipe_mesh] initialized mesh for {env.num_envs} env(s) "
+        f"({x_bins}×{y_bins} bins)",
+        flush=True,
+    )
+
+
+def _sync_wipe_vis_mesh(env) -> None:
+    """Update wipe-coverage vertex colours for env 0 from the env's coverage state.
+
+    Reads ``env._dining_cleanup_wipe_covered`` (a bool tensor written by the
+    termination function each step) and maps it to an RGB heatmap identical to
+    DiningCleanupStateMachine._sync_wipe_vis().
+    """
+    from pxr import Gf, UsdGeom, Vt
+
+    state = getattr(env, "_dining_cleanup_wipe_covered", None)
+    if state is None:
+        return
+
+    stage = env.sim.stage
+    mesh_path = "/World/envs/env_0/Scene/wipe_vis_plane"
+    prim = stage.GetPrimAtPath(mesh_path)
+    if not prim.IsValid():
+        return
+
+    c = state[0].float().cpu()          # (x_bins, y_bins)
+    colors = []
+    for i in range(c.shape[0]):
+        for j in range(c.shape[1]):
+            v = float(c[i, j])
+            if c[i, j] <= 0.0:
+                colors.append(Gf.Vec3f(0.36, 0.25, 0.20))
+            else:
+                colors.append(Gf.Vec3f(1.0, 1.0, 1.0))  
+                
+    UsdGeom.Mesh(prim).GetDisplayColorAttr().Set(Vt.Vec3fArray(colors))
+
+
 def main():
     task_id = resolve_task(args_cli.task)
     args_cli.task = task_id
@@ -588,6 +682,9 @@ def main():
     for _ in range(20):
         simulation_app.update()
     obs_dict = _reset_eval_episode(env, episodes, episode_index=1)
+
+    if args_cli.show_wipe_mesh:
+        _init_wipe_vis_mesh(env)
 
     language_instruction = args_cli.policy_language_instruction
     if language_instruction is None:
@@ -642,6 +739,8 @@ def main():
                     if env.cfg.dynamic_reset_gripper_effort_limit:
                         dynamic_reset_gripper_effort_limit_sim(env, teleop_device)
                     obs_dict, _, reset_terminated, reset_time_outs, _ = env.step(action)
+                    if args_cli.show_wipe_mesh:
+                        _sync_wipe_vis_mesh(env)
                     if reset_terminated[0]:
                         success = True
                         break

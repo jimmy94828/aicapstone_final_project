@@ -17,7 +17,6 @@ from isaaclab.utils.math import (
 
 from pxr import Usd, UsdGeom, Sdf, Gf, Vt
 from simulator.tasks.dining_cleanup.dining_cleanup_env_cfg import (
-    TABLE_SURFACE_Z,
     _create_wipe_vis_mesh,
 )
 
@@ -44,14 +43,14 @@ _FRANKA_ARM_JOINT_NAMES = (
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
 
-_MAX_CARTESIAN_DELTA = 0.022
+_MAX_CARTESIAN_DELTA = 0.02
 _MAX_ROT_DELTA = 0.08
 _IK_DLS_LAMBDA = 0.01
 
 _HOVER_Z_OFFSET = 0.35
 _LIFT_Z_OFFSET = 0.37
-_RELEASE_Z_OFFSET = 0.15
-_WIPE_CONTACT_Z = 0.05
+_RELEASE_Z_OFFSET = 0.2
+_WIPE_CONTACT_Z = 0.06
 _WIPE_HOVER_Z = 0.35
 
 _GRIPPER_DOWN_ROLL_W = math.pi
@@ -80,7 +79,7 @@ _GRASP_Z_AT_CLOSE_PER_OBJECT: dict[str, float] = {
 
 _DROP_X_OFFSET_PER_OBJECT: dict[str, float] = {
     _BOWL_NAME: -0.03,
-    _SPOON_NAME: 0.04,
+    _SPOON_NAME: 0.02,
 }
 _DROP_Y_OFFSET_PER_OBJECT: dict[str, float] = {
     _BOWL_NAME: +0.055,
@@ -89,13 +88,14 @@ _DROP_Y_OFFSET_PER_OBJECT: dict[str, float] = {
 
 # World-frame table regions.  In this advanced task, +x is the Franka-view
 # right side and -x is the Franka-view left side.
-_LEFT_TABLE_X_RANGE = (0.08, 0.22)
+_LEFT_TABLE_X_RANGE = (0.0, 0.22)
 _LEFT_TABLE_Y_RANGE = (-0.50, -0.10)
-_WIPE_LANES_X = (0.08, 0.13, 0.18, 0.22)
+# _WIPE_LANES_X = (0.12, 0.15, 0.2, 0.22)
+_WIPE_LANES_X = (0.21, 0.18, 0.15, 0.11 , 0.07)  # wipe from right to left to reduce risk of pushing objects off the table
 _CLOTH_FOOTPRINT_SIZE = (0.055, 0.115)
 _WIPE_REQUIRED_IDEAL_FRACTION = 0.70
-_WIPE_COVERAGE_RESOLUTION = 0.01
-_WIPE_CONTACT_Z_RANGE = (0.03, 0.09)
+_WIPE_COVERAGE_RESOLUTION = 0.005
+_WIPE_CONTACT_Z_RANGE = (0.05, 0.09)
 _STATIC_OBJECT_XY_TOL = 0.035
 _STATIC_OBJECT_INITIAL_XY = {
     _TISSUE_NAME: (0.35, -0.12),
@@ -134,31 +134,35 @@ def _build_events() -> tuple[_EventSpec, ...]:
         events.extend(
             [
                 _EventSpec("move_above_object", obj_name, 180),
-                _EventSpec("approach_object", obj_name, 160),
+                _EventSpec("approach_object", obj_name, 130),
                 _EventSpec("grasp_object", obj_name, 25),
                 _EventSpec("lift_object", obj_name, 130),
                 _EventSpec("move_above_drop", obj_name, 170),
                 _EventSpec("lower_to_release", obj_name, 80),
-                _EventSpec("retreat_from_drop", obj_name, 40),
+                _EventSpec("retreat_from_drop", obj_name, 100),
             ]
         )
 
     events.extend(
         [
-            _EventSpec("move_above_object", _CLOTH_NAME, 160),
+            _EventSpec("move_above_object", _CLOTH_NAME, 130),
             _EventSpec("approach_object", _CLOTH_NAME, 130),
             _EventSpec("grasp_object", _CLOTH_NAME, 30),
             _EventSpec("lift_object", _CLOTH_NAME, 110),
-            _EventSpec("move_above_wipe_start", _CLOTH_NAME, 160),
+            _EventSpec("move_above_wipe_start", _CLOTH_NAME, 120),
             _EventSpec("lower_to_wipe", _CLOTH_NAME, 80),
         ]
     )
 
     for lane_idx in range(len(_WIPE_LANES_X)):
-        events.append(_EventSpec("wipe_sweep", str(lane_idx), 250))
+        events.append(_EventSpec("wipe_sweep", str(lane_idx), 200))
         if lane_idx < len(_WIPE_LANES_X) - 1:
-            events.append(_EventSpec("wipe_shift", str(lane_idx), 60))
-    events.append(_EventSpec("wipe_lift_finish", _CLOTH_NAME, 80))
+            events.append(_EventSpec("wipe_shift", str(lane_idx), 200))
+    # events.append(_EventSpec("wipe_lift_finish", _CLOTH_NAME, 160))
+    events.append(_EventSpec("lift_object", _CLOTH_NAME, 110))
+    events.append(_EventSpec("move_above_drop", _CLOTH_NAME, 160))
+    events.append(_EventSpec("lower_to_release", _CLOTH_NAME, 60))
+    events.append(_EventSpec("retreat_from_drop", _CLOTH_NAME, 40))
     return tuple(events)
 
 
@@ -336,7 +340,7 @@ class DiningCleanupStateMachine(StateMachineBase):
                     y_range=(oy + _LEFT_TABLE_Y_RANGE[0], oy + _LEFT_TABLE_Y_RANGE[1]),
                     x_bins=x_bins,
                     y_bins=y_bins,
-                    z= 0.0001,
+                    z= 0.045,
                 )
 
     def check_success(self, env) -> bool:
@@ -464,13 +468,12 @@ class DiningCleanupStateMachine(StateMachineBase):
         if self._step_count == 0 and event.kind in ("move_above_object", "move_above_wipe_start"):
             self._initial_ee_pos_w = self._ee_pos_w(robot).clone()
 
-        target_quat_w = self._gripper_down_quat_w(
-            active_quat_w,
+        target_quat_w = self._target_orientation(
+            event,
             active_obj_name,
+            active_quat_w,
             num_envs,
             device,
-            active_quat_w.dtype,
-            yaw_offset=_GRASP_YAW_OFFSET,
         )
 
         if event.kind == "move_above_object":
@@ -506,6 +509,45 @@ class DiningCleanupStateMachine(StateMachineBase):
 
         return self._joint_position_franka_action(env, target_pos_w, target_quat_w, gripper_cmd)
 
+    def _target_orientation(
+        self,
+        event,
+        obj_name,
+        obj_quat_w,
+        num_envs,
+        device,
+    ):
+        # 放叉子前轉正
+        if (
+            obj_name == _SPOON_NAME
+            and event.kind in ("move_above_drop", "lower_to_release")
+        ):
+            roll = torch.full(
+                (num_envs,),
+                _GRIPPER_DOWN_ROLL_W,
+                device=device,
+                dtype=obj_quat_w.dtype,
+            )
+
+            pitch = torch.zeros_like(roll)
+
+            # 朝世界 +X
+            yaw = torch.zeros_like(roll)
+
+            return quat_from_euler_xyz(
+                roll,
+                pitch,
+                yaw,
+            )
+
+        return self._gripper_down_quat_w(
+            obj_quat_w,
+            obj_name,
+            num_envs,
+            device,
+            obj_quat_w.dtype,
+            yaw_offset=_GRASP_YAW_OFFSET,
+        )
     # ------------------------------------------------------------------
     # Phase helpers
     # ------------------------------------------------------------------
@@ -573,8 +615,11 @@ class DiningCleanupStateMachine(StateMachineBase):
         colors = []
         for i in range(c.shape[0]):
             for j in range(c.shape[1]):
-                v = float(c[i, j])
-                colors.append(Gf.Vec3f(v, 0.2 * v, 1.0 - v))
+                # v = float(c[i, j])
+                if c[i, j] <= 0.0:
+                    colors.append(Gf.Vec3f(0.36, 0.25, 0.20))
+                else:
+                    colors.append(Gf.Vec3f(1.0, 1.0, 1.0))
 
         attr = UsdGeom.Mesh(prim).GetDisplayColorAttr()
         attr.Set(Vt.Vec3fArray(colors))
@@ -649,42 +694,36 @@ class DiningCleanupStateMachine(StateMachineBase):
 
     def _wipe_lane_endpoint(self, lane_idx: int, at_end: bool) -> tuple[float, float]:
         x = _WIPE_LANES_X[lane_idx]
-        forward = lane_idx % 2 == 0
         y0, y1 = _LEFT_TABLE_Y_RANGE
-        y = y1 if at_end == forward else y0
+        y = y1 if at_end else y0
         return x, y
 
     def _phase_move_above_wipe_start(self, env):
         x, y = self._wipe_lane_endpoint(0, at_end=False)
         target = self._wipe_point_w(env, x, y, _WIPE_HOVER_Z)
-        # if self._initial_ee_pos_w is not None:
-        #     alpha = self._phase_alpha()
-        #     target = (1.0 - alpha) * self._initial_ee_pos_w + alpha * target
         return target, _constant_gripper(env.num_envs, env.device, _GRIPPER_CLOSE)
 
     def _phase_lower_to_wipe(self, env):
         x, y = self._wipe_lane_endpoint(0, at_end=False)
+        if self._phase_alpha() == 1:
+            print(x,y)
         return self._wipe_point_w(env, x, y, _WIPE_CONTACT_Z), _constant_gripper(
             env.num_envs, env.device, _GRIPPER_CLOSE
         )
 
     def _phase_wipe_sweep(self, env, lane_idx: int):
-        x0, y0 = self._wipe_lane_endpoint(lane_idx, at_end=False)
-        x1, y1 = self._wipe_lane_endpoint(lane_idx, at_end=True)
-        # alpha = self._phase_alpha()
-        # x = (1.0 - alpha) * x0 + alpha * x1
-        # y = (1.0 - alpha) * y0 + alpha * y1
-        return self._wipe_point_w(env, x1, y1, _WIPE_CONTACT_Z), _constant_gripper(
+        x, y = self._wipe_lane_endpoint(lane_idx, at_end=True)
+        if self._phase_alpha() == 1:
+            print(x,y)
+        return self._wipe_point_w(env, x, y, _WIPE_CONTACT_Z), _constant_gripper(
             env.num_envs, env.device, _GRIPPER_CLOSE
         )
 
     def _phase_wipe_shift(self, env, lane_idx: int):
-        x0, y0 = self._wipe_lane_endpoint(lane_idx, at_end=True)
-        x1, y1 = self._wipe_lane_endpoint(lane_idx + 1, at_end=False)
-        # alpha = self._phase_alpha()
-        # x = (1.0 - alpha) * x0 + alpha * x1
-        # y = (1.0 - alpha) * y0 + alpha * y1
-        return self._wipe_point_w(env, x1, y1, _WIPE_CONTACT_Z), _constant_gripper(
+        x, y = self._wipe_lane_endpoint(lane_idx + 1, at_end=False)
+        if self._phase_alpha() == 1:
+            print(x,y)
+        return self._wipe_point_w(env, x, y, _WIPE_CONTACT_Z), _constant_gripper(
             env.num_envs, env.device, _GRIPPER_CLOSE
         )
 
