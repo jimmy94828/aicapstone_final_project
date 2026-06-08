@@ -36,14 +36,14 @@ _FRANKA_ARM_JOINT_NAMES = (
 _GRIPPER_OPEN = 1.0
 _GRIPPER_CLOSE = -1.0
 
-_MAX_CARTESIAN_DELTA = 0.022
+_MAX_CARTESIAN_DELTA = 0.02
 _MAX_ROT_DELTA = 0.08
 _IK_DLS_LAMBDA = 0.01
 
-_HOVER_Z_OFFSET = 0.20
+_HOVER_Z_OFFSET = 0.25
 _GRASP_Z_OFFSET = 0.08
-_LIFT_Z_OFFSET = 0.20
-_RELEASE_Z_OFFSET = 0.10
+_LIFT_Z_OFFSET = 0.25
+_RELEASE_Z_OFFSET = 0.12
 _RELEASE_TOL_M = 0.015
 _GRIPPER_DOWN_ROLL_W = math.pi
 _GRIPPER_DOWN_PITCH_W = 0.0
@@ -71,9 +71,9 @@ _FRANKA_REST_JOINT_POS = {
 }
 
 _PICK_ORDER = (_KNIFE_NAME, _FORK_NAME)
-_PLACE_X_SIGNS = (-1.0, +1.0)  # knife → -x of plate, fork → +x of plate
+_PLACE_X_SIGNS = (+1.0, -1.0)  # knife → +x of plate, fork → -x of plate
 
-_PHASE_DURATIONS_PER_OBJECT = (180, 130, 20, 80, 170, 15, 50)
+_PHASE_DURATIONS_PER_OBJECT = (180, 130, 20, 70, 170, 15, 50)
 _PHASES_PER_OBJECT = len(_PHASE_DURATIONS_PER_OBJECT)
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ _PHASES_PER_OBJECT = len(_PHASE_DURATIONS_PER_OBJECT)
 #
 # Noise is sampled ONCE per phase, then linearly decayed to 0 over the phase.
 # This produces a "drift-then-correct" shape rather than random jitter.
-_DART_SIGMA_XY = (0.1, 0.01, 0.003, 0.000, 0.1, 0.003, 0.002)
+_DART_SIGMA_XY = (0.05, 0.01, 0.003, 0.000, 0.05, 0.003, 0.002)
 _DART_SIGMA_Z  = (0.01, 0.01, 0.002, 0.005, 0.01, 0.002, 0.001)
 
 

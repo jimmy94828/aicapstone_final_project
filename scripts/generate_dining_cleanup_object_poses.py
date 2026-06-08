@@ -31,9 +31,8 @@ OBJECT_WORLD_X_RANGE = (0.10, 0.24)
 OBJECT_WORLD_Y_RANGE = (-0.50, -0.22)
 MIN_CLEARANCE = 0.040
 MAX_PAIR_DISTANCE = 0.28
-SPOON_WORLD_YAW = math.pi / 4.0
+SPOON_DEFAULT_WORLD_YAW = math.pi / 4.0
 SPOON_YAW_OFFSET = 3.0 * math.pi / 2.0
-SPOON_RAW_YAW = (SPOON_WORLD_YAW - SPOON_YAW_OFFSET + math.pi) % (2.0 * math.pi) - math.pi
 
 # Top-down footprints after applying the task spawn scale in
 # DiningCleanupEnvCfg.  Bowl/spoon can yaw per episode, so overlap rejection
@@ -71,6 +70,18 @@ def world_xy_to_raw_xy(world_xy: tuple[float, float]) -> tuple[float, float]:
 
 def dist_xy(a: tuple[float, float], b: tuple[float, float]) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def normalize_angle(angle: float) -> float:
+    return (angle + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def spoon_world_yaw_to_raw_yaw(world_yaw: float) -> float:
+    return normalize_angle(world_yaw - ANCHOR_WORLD_POSE[2] - SPOON_YAW_OFFSET)
+
+
+def spoon_raw_yaw_to_world_yaw(raw_yaw: float) -> float:
+    return normalize_angle(ANCHOR_WORLD_POSE[2] + raw_yaw + SPOON_YAW_OFFSET)
 
 
 def footprint_radius(name: str) -> float:
@@ -111,33 +122,47 @@ def sample_pair(
     *,
     object_world_x_range: tuple[float, float],
     object_world_y_range: tuple[float, float],
+    spoon_world_x_range: tuple[float, float],
+    spoon_world_y_range: tuple[float, float],
     min_clearance: float,
     max_pair_distance: float,
+    spoon_placement_mode: str,
+    allow_bowl_spoon_overlap: bool,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
     min_pair_distance = footprint_radius("bowl") + footprint_radius("spoon") + min_clearance
-    if max_pair_distance < min_pair_distance:
+    if spoon_placement_mode == "relative" and not allow_bowl_spoon_overlap and max_pair_distance < min_pair_distance:
         raise ValueError(
             f"max_pair_distance={max_pair_distance:.3f} is smaller than required "
             f"minimum pair distance={min_pair_distance:.3f}"
         )
     for _ in range(5000):
         bowl_xy = random_world_xy(rng, x_range=object_world_x_range, y_range=object_world_y_range)
-        pair_distance = rng.uniform(min_pair_distance, max_pair_distance)
-        pair_theta = rng.uniform(-math.pi, math.pi)
-        spoon_xy = (
-            bowl_xy[0] + pair_distance * math.cos(pair_theta),
-            bowl_xy[1] + pair_distance * math.sin(pair_theta),
-        )
-        if not (
-            object_world_x_range[0] <= spoon_xy[0] <= object_world_x_range[1]
-            and object_world_y_range[0] <= spoon_xy[1] <= object_world_y_range[1]
-        ):
+        if not valid_object_xy("bowl", bowl_xy, min_clearance=min_clearance):
             continue
-        if not valid_object_xy("bowl", bowl_xy, min_clearance=min_clearance) or not valid_object_xy(
-            "spoon", spoon_xy, min_clearance=min_clearance
-        ):
+
+        if spoon_placement_mode == "relative":
+            pair_min = 0.0 if allow_bowl_spoon_overlap else min_pair_distance
+            pair_distance = rng.uniform(pair_min, max_pair_distance)
+            pair_theta = rng.uniform(-math.pi, math.pi)
+            spoon_xy = (
+                bowl_xy[0] + pair_distance * math.cos(pair_theta),
+                bowl_xy[1] + pair_distance * math.sin(pair_theta),
+            )
+            if not (
+                spoon_world_x_range[0] <= spoon_xy[0] <= spoon_world_x_range[1]
+                and spoon_world_y_range[0] <= spoon_xy[1] <= spoon_world_y_range[1]
+            ):
+                continue
+        elif spoon_placement_mode == "independent":
+            spoon_xy = random_world_xy(rng, x_range=spoon_world_x_range, y_range=spoon_world_y_range)
+        else:
+            raise ValueError(f"unknown spoon placement mode: {spoon_placement_mode}")
+
+        if not valid_object_xy("spoon", spoon_xy, min_clearance=min_clearance):
             continue
-        if not footprints_clear("bowl", bowl_xy, "spoon", spoon_xy, min_clearance=min_clearance):
+        if not allow_bowl_spoon_overlap and not footprints_clear(
+            "bowl", bowl_xy, "spoon", spoon_xy, min_clearance=min_clearance
+        ):
             continue
         return bowl_xy, spoon_xy
     raise RuntimeError("failed to sample a valid bowl/spoon pair")
@@ -154,8 +179,14 @@ def build_entries(
     *,
     object_world_x_range: tuple[float, float],
     object_world_y_range: tuple[float, float],
+    spoon_world_x_range: tuple[float, float],
+    spoon_world_y_range: tuple[float, float],
     min_clearance: float,
     max_pair_distance: float,
+    spoon_yaw_mode: str,
+    spoon_fixed_world_yaw: float,
+    spoon_placement_mode: str,
+    allow_bowl_spoon_overlap: bool,
 ) -> list[dict]:
     rng = random.Random(seed)
     entries: list[dict] = []
@@ -166,16 +197,27 @@ def build_entries(
             rng,
             object_world_x_range=object_world_x_range,
             object_world_y_range=object_world_y_range,
+            spoon_world_x_range=spoon_world_x_range,
+            spoon_world_y_range=spoon_world_y_range,
             min_clearance=min_clearance,
             max_pair_distance=max_pair_distance,
+            spoon_placement_mode=spoon_placement_mode,
+            allow_bowl_spoon_overlap=allow_bowl_spoon_overlap,
         )
         bowl_raw_xy = world_xy_to_raw_xy(bowl_world_xy)
         spoon_raw_xy = world_xy_to_raw_xy(spoon_world_xy)
 
         bowl_yaw = rng.uniform(-math.pi, math.pi)
-        # The task loader adds the spoon USD yaw offset, so this raw yaw yields
-        # a final world yaw of 45 degrees from +x in every generated episode.
-        spoon_yaw = SPOON_RAW_YAW
+        if spoon_yaw_mode == "fixed":
+            spoon_world_yaw = spoon_fixed_world_yaw
+        elif spoon_yaw_mode == "random":
+            spoon_world_yaw = rng.uniform(-math.pi, math.pi)
+        else:
+            raise ValueError(f"unknown spoon yaw mode: {spoon_yaw_mode}")
+
+        # The task loader adds the spoon USD yaw offset, so store the inverse
+        # raw yaw needed to obtain the requested final world yaw.
+        spoon_yaw = spoon_world_yaw_to_raw_yaw(spoon_world_yaw)
         objects = [
             {
                 "object_name": "bowl",
@@ -204,7 +246,14 @@ def build_entries(
     return entries
 
 
-def summarize(entries: list[dict], *, min_clearance: float, max_pair_distance: float) -> None:
+def summarize(
+    entries: list[dict],
+    *,
+    min_clearance: float,
+    max_pair_distance: float,
+    spoon_placement_mode: str,
+    allow_bowl_spoon_overlap: bool,
+) -> None:
     print(f"episodes={len(entries)}")
     for name in ("bowl", "spoon"):
         xs, ys = [], []
@@ -233,10 +282,21 @@ def summarize(entries: list[dict], *, min_clearance: float, max_pair_distance: f
         f"[{min(pair_dists):.3f}, {max(pair_dists):.3f}], "
         f"mean={sum(pair_dists) / len(pair_dists):.3f}"
     )
+    spoon_yaws = []
+    for entry in entries:
+        spoon = next(o for o in entry["objects"] if o["object_name"] == "spoon")
+        spoon_yaws.append(spoon_raw_yaw_to_world_yaw(spoon["rvec"][2]))
+    print(
+        "spoon world yaw deg="
+        f"[{math.degrees(min(spoon_yaws)):.1f}, {math.degrees(max(spoon_yaws)):.1f}], "
+        f"mean={math.degrees(sum(spoon_yaws) / len(spoon_yaws)):.1f}"
+    )
     print(
         "scaled footprint clearance min="
         f"{footprint_radius('bowl') + footprint_radius('spoon') + min_clearance:.3f}"
     )
+    print(f"spoon placement mode={spoon_placement_mode}")
+    print(f"allow bowl-spoon XY overlap={allow_bowl_spoon_overlap}")
     print(f"configured bowl-spoon max distance={max_pair_distance:.3f}")
     for name in ("tray", "tissue", "vase", "cloth", "bowl", "spoon"):
         sx, sy = FOOTPRINT_SIZE[name]
@@ -275,6 +335,18 @@ def parse_args() -> argparse.Namespace:
         help="World-frame y range for both bowl and spoon starts, formatted as 'min,max'.",
     )
     parser.add_argument(
+        "--spoon-world-x-range",
+        type=lambda value: parse_range(value, name="--spoon-world-x-range"),
+        default=None,
+        help="Optional spoon-only world-frame x range. Defaults to --object-world-x-range.",
+    )
+    parser.add_argument(
+        "--spoon-world-y-range",
+        type=lambda value: parse_range(value, name="--spoon-world-y-range"),
+        default=None,
+        help="Optional spoon-only world-frame y range. Defaults to --object-world-y-range.",
+    )
+    parser.add_argument(
         "--min-clearance",
         type=float,
         default=MIN_CLEARANCE,
@@ -286,19 +358,53 @@ def parse_args() -> argparse.Namespace:
         default=MAX_PAIR_DISTANCE,
         help="Maximum XY distance between bowl and spoon centers.",
     )
+    parser.add_argument(
+        "--spoon-yaw-mode",
+        choices=("fixed", "random"),
+        default="fixed",
+        help="Use the original fixed spoon yaw or randomize spoon yaw per episode.",
+    )
+    parser.add_argument(
+        "--spoon-fixed-world-yaw",
+        type=float,
+        default=SPOON_DEFAULT_WORLD_YAW,
+        help="Fixed final spoon world yaw in radians when --spoon-yaw-mode=fixed.",
+    )
+    parser.add_argument(
+        "--spoon-placement-mode",
+        choices=("relative", "independent"),
+        default="relative",
+        help=(
+            "'relative' samples spoon by distance from bowl. "
+            "'independent' samples spoon uniformly after bowl placement."
+        ),
+    )
+    parser.add_argument(
+        "--allow-bowl-spoon-overlap",
+        action="store_true",
+        help="Allow bowl and spoon XY footprints to overlap in the generated poses.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    spoon_world_x_range = args.spoon_world_x_range or args.object_world_x_range
+    spoon_world_y_range = args.spoon_world_y_range or args.object_world_y_range
     entries = build_entries(
         args.count,
         args.seed,
         args.video_name,
         object_world_x_range=args.object_world_x_range,
         object_world_y_range=args.object_world_y_range,
+        spoon_world_x_range=spoon_world_x_range,
+        spoon_world_y_range=spoon_world_y_range,
         min_clearance=args.min_clearance,
         max_pair_distance=args.max_pair_distance,
+        spoon_yaw_mode=args.spoon_yaw_mode,
+        spoon_fixed_world_yaw=args.spoon_fixed_world_yaw,
+        spoon_placement_mode=args.spoon_placement_mode,
+        allow_bowl_spoon_overlap=args.allow_bowl_spoon_overlap,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w") as f:
@@ -311,7 +417,18 @@ def main() -> None:
         f"x=[{args.object_world_x_range[0]:.3f}, {args.object_world_x_range[1]:.3f}], "
         f"y=[{args.object_world_y_range[0]:.3f}, {args.object_world_y_range[1]:.3f}]"
     )
-    summarize(entries, min_clearance=args.min_clearance, max_pair_distance=args.max_pair_distance)
+    print(
+        "configured spoon world range: "
+        f"x=[{spoon_world_x_range[0]:.3f}, {spoon_world_x_range[1]:.3f}], "
+        f"y=[{spoon_world_y_range[0]:.3f}, {spoon_world_y_range[1]:.3f}]"
+    )
+    summarize(
+        entries,
+        min_clearance=args.min_clearance,
+        max_pair_distance=args.max_pair_distance,
+        spoon_placement_mode=args.spoon_placement_mode,
+        allow_bowl_spoon_overlap=args.allow_bowl_spoon_overlap,
+    )
 
 
 if __name__ == "__main__":
