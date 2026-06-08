@@ -54,7 +54,7 @@ _GRASP_RETREAT_PER_OBJECT: dict[str, float] = {
     "knife": 0.025,
 }
 
-_PLACE_OFFSET = 0.10
+_PLACE_OFFSET = 0.08
 
 _SUCCESS_MAX_DIST_XY = 0.15
 
