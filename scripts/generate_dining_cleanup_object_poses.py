@@ -87,33 +87,57 @@ def random_world_xy(
     return rng.uniform(*x_range), rng.uniform(*y_range)
 
 
-def footprints_clear(a_name: str, a_xy: tuple[float, float], b_name: str, b_xy: tuple[float, float]) -> bool:
-    min_dist = footprint_radius(a_name) + footprint_radius(b_name) + MIN_CLEARANCE
+def footprints_clear(
+    a_name: str,
+    a_xy: tuple[float, float],
+    b_name: str,
+    b_xy: tuple[float, float],
+    *,
+    min_clearance: float,
+) -> bool:
+    min_dist = footprint_radius(a_name) + footprint_radius(b_name) + min_clearance
     return dist_xy(a_xy, b_xy) >= min_dist
 
 
-def valid_object_xy(name: str, point: tuple[float, float]) -> bool:
-    return all(footprints_clear(name, point, static_name, static_xy) for static_name, static_xy in STATIC_WORLD_XY)
+def valid_object_xy(name: str, point: tuple[float, float], *, min_clearance: float) -> bool:
+    return all(
+        footprints_clear(name, point, static_name, static_xy, min_clearance=min_clearance)
+        for static_name, static_xy in STATIC_WORLD_XY
+    )
 
 
-def sample_pair(rng: random.Random) -> tuple[tuple[float, float], tuple[float, float]]:
-    min_pair_distance = footprint_radius("bowl") + footprint_radius("spoon") + MIN_CLEARANCE
+def sample_pair(
+    rng: random.Random,
+    *,
+    object_world_x_range: tuple[float, float],
+    object_world_y_range: tuple[float, float],
+    min_clearance: float,
+    max_pair_distance: float,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    min_pair_distance = footprint_radius("bowl") + footprint_radius("spoon") + min_clearance
+    if max_pair_distance < min_pair_distance:
+        raise ValueError(
+            f"max_pair_distance={max_pair_distance:.3f} is smaller than required "
+            f"minimum pair distance={min_pair_distance:.3f}"
+        )
     for _ in range(5000):
-        bowl_xy = random_world_xy(rng, x_range=OBJECT_WORLD_X_RANGE, y_range=OBJECT_WORLD_Y_RANGE)
-        pair_distance = rng.uniform(min_pair_distance, MAX_PAIR_DISTANCE)
+        bowl_xy = random_world_xy(rng, x_range=object_world_x_range, y_range=object_world_y_range)
+        pair_distance = rng.uniform(min_pair_distance, max_pair_distance)
         pair_theta = rng.uniform(-math.pi, math.pi)
         spoon_xy = (
             bowl_xy[0] + pair_distance * math.cos(pair_theta),
             bowl_xy[1] + pair_distance * math.sin(pair_theta),
         )
         if not (
-            OBJECT_WORLD_X_RANGE[0] <= spoon_xy[0] <= OBJECT_WORLD_X_RANGE[1]
-            and OBJECT_WORLD_Y_RANGE[0] <= spoon_xy[1] <= OBJECT_WORLD_Y_RANGE[1]
+            object_world_x_range[0] <= spoon_xy[0] <= object_world_x_range[1]
+            and object_world_y_range[0] <= spoon_xy[1] <= object_world_y_range[1]
         ):
             continue
-        if not valid_object_xy("bowl", bowl_xy) or not valid_object_xy("spoon", spoon_xy):
+        if not valid_object_xy("bowl", bowl_xy, min_clearance=min_clearance) or not valid_object_xy(
+            "spoon", spoon_xy, min_clearance=min_clearance
+        ):
             continue
-        if not footprints_clear("bowl", bowl_xy, "spoon", spoon_xy):
+        if not footprints_clear("bowl", bowl_xy, "spoon", spoon_xy, min_clearance=min_clearance):
             continue
         return bowl_xy, spoon_xy
     raise RuntimeError("failed to sample a valid bowl/spoon pair")
@@ -123,13 +147,28 @@ def rvec_z_yaw(yaw: float) -> list[float]:
     return [0.0, 0.0, yaw]
 
 
-def build_entries(count: int, seed: int, video_name: str) -> list[dict]:
+def build_entries(
+    count: int,
+    seed: int,
+    video_name: str,
+    *,
+    object_world_x_range: tuple[float, float],
+    object_world_y_range: tuple[float, float],
+    min_clearance: float,
+    max_pair_distance: float,
+) -> list[dict]:
     rng = random.Random(seed)
     entries: list[dict] = []
     frame_cursor = 0
 
     for idx in range(count):
-        bowl_world_xy, spoon_world_xy = sample_pair(rng)
+        bowl_world_xy, spoon_world_xy = sample_pair(
+            rng,
+            object_world_x_range=object_world_x_range,
+            object_world_y_range=object_world_y_range,
+            min_clearance=min_clearance,
+            max_pair_distance=max_pair_distance,
+        )
         bowl_raw_xy = world_xy_to_raw_xy(bowl_world_xy)
         spoon_raw_xy = world_xy_to_raw_xy(spoon_world_xy)
 
@@ -165,7 +204,7 @@ def build_entries(count: int, seed: int, video_name: str) -> list[dict]:
     return entries
 
 
-def summarize(entries: list[dict]) -> None:
+def summarize(entries: list[dict], *, min_clearance: float, max_pair_distance: float) -> None:
     print(f"episodes={len(entries)}")
     for name in ("bowl", "spoon"):
         xs, ys = [], []
@@ -196,12 +235,25 @@ def summarize(entries: list[dict]) -> None:
     )
     print(
         "scaled footprint clearance min="
-        f"{footprint_radius('bowl') + footprint_radius('spoon') + MIN_CLEARANCE:.3f}"
+        f"{footprint_radius('bowl') + footprint_radius('spoon') + min_clearance:.3f}"
     )
-    print(f"configured bowl-spoon max distance={MAX_PAIR_DISTANCE:.3f}")
+    print(f"configured bowl-spoon max distance={max_pair_distance:.3f}")
     for name in ("tray", "tissue", "vase", "cloth", "bowl", "spoon"):
         sx, sy = FOOTPRINT_SIZE[name]
         print(f"{name} scaled footprint: {sx:.3f} x {sy:.3f} m")
+
+
+def parse_range(text: str, *, name: str) -> tuple[float, float]:
+    parts = [part.strip() for part in text.split(",")]
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError(f"{name} must use 'min,max' format, got {text!r}")
+    try:
+        lo, hi = float(parts[0]), float(parts[1])
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{name} must contain numeric bounds, got {text!r}") from exc
+    if hi <= lo:
+        raise argparse.ArgumentTypeError(f"{name} max must be greater than min, got {text!r}")
+    return lo, hi
 
 
 def parse_args() -> argparse.Namespace:
@@ -210,19 +262,56 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=2026053002, help="Deterministic random seed.")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output JSON path.")
     parser.add_argument("--video-name", default=DEFAULT_VIDEO_NAME)
+    parser.add_argument(
+        "--object-world-x-range",
+        type=lambda value: parse_range(value, name="--object-world-x-range"),
+        default=OBJECT_WORLD_X_RANGE,
+        help="World-frame x range for both bowl and spoon starts, formatted as 'min,max'.",
+    )
+    parser.add_argument(
+        "--object-world-y-range",
+        type=lambda value: parse_range(value, name="--object-world-y-range"),
+        default=OBJECT_WORLD_Y_RANGE,
+        help="World-frame y range for both bowl and spoon starts, formatted as 'min,max'.",
+    )
+    parser.add_argument(
+        "--min-clearance",
+        type=float,
+        default=MIN_CLEARANCE,
+        help="Minimum XY clearance between object footprint radii.",
+    )
+    parser.add_argument(
+        "--max-pair-distance",
+        type=float,
+        default=MAX_PAIR_DISTANCE,
+        help="Maximum XY distance between bowl and spoon centers.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    entries = build_entries(args.count, args.seed, args.video_name)
+    entries = build_entries(
+        args.count,
+        args.seed,
+        args.video_name,
+        object_world_x_range=args.object_world_x_range,
+        object_world_y_range=args.object_world_y_range,
+        min_clearance=args.min_clearance,
+        max_pair_distance=args.max_pair_distance,
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w") as f:
         json.dump(entries, f, indent=4)
         f.write("\n")
 
     print(args.output)
-    summarize(entries)
+    print(
+        "configured bowl/spoon world range: "
+        f"x=[{args.object_world_x_range[0]:.3f}, {args.object_world_x_range[1]:.3f}], "
+        f"y=[{args.object_world_y_range[0]:.3f}, {args.object_world_y_range[1]:.3f}]"
+    )
+    summarize(entries, min_clearance=args.min_clearance, max_pair_distance=args.max_pair_distance)
 
 
 if __name__ == "__main__":

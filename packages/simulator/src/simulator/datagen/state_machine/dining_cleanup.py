@@ -352,6 +352,10 @@ class DiningCleanupStateMachine(StateMachineBase):
         tray_pos = env.scene[_TRAY_NAME].data.root_pos_w - env.scene.env_origins
         bowl_pos = env.scene[_BOWL_NAME].data.root_pos_w - env.scene.env_origins
         spoon_pos = env.scene[_SPOON_NAME].data.root_pos_w - env.scene.env_origins
+        cloth_pos = env.scene[_CLOTH_NAME].data.root_pos_w - env.scene.env_origins
+        tissue_pos = env.scene[_TISSUE_NAME].data.root_pos_w - env.scene.env_origins
+        vase_pos = env.scene[_VASE_NAME].data.root_pos_w - env.scene.env_origins
+
 
         timeline_done = torch.full((env.num_envs,), self._wipe_complete, dtype=torch.bool, device=env.device)
         bowl_in_tray_xy = torch.logical_and(
@@ -372,10 +376,12 @@ class DiningCleanupStateMachine(StateMachineBase):
         tray_stable = tray_dist <= _TRAY_XY_TOL
 
         protected_stable = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
+        protected_dists: dict[str, torch.Tensor] = {}
         for obj_name, expected_xy in _STATIC_OBJECT_INITIAL_XY.items():
             obj_pos = env.scene[obj_name].data.root_pos_w - env.scene.env_origins
             expected = torch.tensor(expected_xy, dtype=obj_pos.dtype, device=obj_pos.device)
             obj_dist = torch.norm(obj_pos[:, :2] - expected, dim=1)
+            protected_dists[obj_name] = obj_dist
             protected_stable = torch.logical_and(protected_stable, obj_dist <= _STATIC_OBJECT_XY_TOL)
 
         no_non_tableware_fall = torch.ones(env.num_envs, dtype=torch.bool, device=env.device)
@@ -383,21 +389,54 @@ class DiningCleanupStateMachine(StateMachineBase):
             obj_pos = env.scene[obj_name].data.root_pos_w - env.scene.env_origins
             no_non_tableware_fall = torch.logical_and(no_non_tableware_fall, obj_pos[:, 2] >= _FALL_THRESHOLD_Z)
 
+        cloth_in_tray_xy = torch.logical_and(
+            torch.abs(cloth_pos[:, 0] - tray_pos[:, 0]) <= _TRAY_SUCCESS_X_HALF_WIDTH,
+            torch.abs(cloth_pos[:, 1] - tray_pos[:, 1]) <= _TRAY_SUCCESS_Y_HALF_WIDTH,
+        )
+
+        wiping_done = torch.logical_and(coverage_done, cloth_in_tray_xy)
+
+        bowl_tray_abs = torch.abs(bowl_pos[:, :2] - tray_pos[:, :2])
+        spoon_tray_abs = torch.abs(spoon_pos[:, :2] - tray_pos[:, :2])
+        cloth_tray_abs = torch.abs(cloth_pos[:, :2] - tray_pos[:, :2])
+        cloth_contact = torch.logical_and(
+            cloth_pos[:, 2] >= _WIPE_CONTACT_Z_RANGE[0],
+            cloth_pos[:, 2] <= _WIPE_CONTACT_Z_RANGE[1],
+        )
+        non_tableware_min_z = torch.stack(
+            [tray_pos[:, 2], cloth_pos[:, 2], tissue_pos[:, 2], vase_pos[:, 2]],
+            dim=0,
+        ).amin(dim=0)
+
         overall = timeline_done
-        for term in (tableware_done, coverage_done, tray_stable, protected_stable, no_non_tableware_fall):
+        for term in (tableware_done, coverage_done, tray_stable, protected_stable, no_non_tableware_fall, wiping_done):
             overall = torch.logical_and(overall, term)
 
         return {
             "timeline": timeline_done,
             "bowl_xy": bowl_in_tray_xy,
             "spoon_xy": spoon_in_tray_xy,
+            "cloth_xy": cloth_in_tray_xy,
             "tableware": tableware_done,
-            "wiping": coverage_done,
+            "coverage": coverage_done,
+            "wiping": wiping_done,
             "tray_stable": tray_stable,
             "protected": protected_stable,
             "no_non_tableware_fall": no_non_tableware_fall,
             "overall": overall,
             "coverage_ratio": coverage_ratio,
+            "bowl_tray_dx": bowl_tray_abs[:, 0],
+            "bowl_tray_dy": bowl_tray_abs[:, 1],
+            "spoon_tray_dx": spoon_tray_abs[:, 0],
+            "spoon_tray_dy": spoon_tray_abs[:, 1],
+            "cloth_tray_dx": cloth_tray_abs[:, 0],
+            "cloth_tray_dy": cloth_tray_abs[:, 1],
+            "cloth_z": cloth_pos[:, 2],
+            "cloth_contact": cloth_contact,
+            "tray_dist": tray_dist,
+            "tissue_dist": protected_dists[_TISSUE_NAME],
+            "vase_dist": protected_dists[_VASE_NAME],
+            "non_tableware_min_z": non_tableware_min_z,
         }
 
     def _print_success_status(self, status: dict[str, torch.Tensor]) -> None:
@@ -414,10 +453,8 @@ class DiningCleanupStateMachine(StateMachineBase):
         def line(key: str, value: str, indent: int = 0) -> str:
             return f"{' ' * indent}{key:<24}: {value}"
 
-        coverage_text = ", ".join(
-            f"{v:.3f}"
-            for v in status["coverage_ratio"].detach().cpu().tolist()
-        )
+        def values(name: str) -> str:
+            return ", ".join(f"{value:.3f}" for value in status[name].detach().cpu().tolist())
 
         print(
             "\n".join(
@@ -426,9 +463,15 @@ class DiningCleanupStateMachine(StateMachineBase):
                     line("timeline", word("timeline")),
                     line("tableware", word("tableware")),
                     line("bowl_xy", word("bowl_xy"), indent=2),
+                    line("bowl tray dx/dy", f"{values('bowl_tray_dx')} / {values('bowl_tray_dy')}", indent=2),
                     line("spoon_xy", word("spoon_xy"), indent=2),
+                    line("spoon tray dx/dy", f"{values('spoon_tray_dx')} / {values('spoon_tray_dy')}", indent=2),
+                    line("cloth_xy", word("cloth_xy"), indent=2),
+                    line("cloth tray dx/dy", f"{values('cloth_tray_dx')} / {values('cloth_tray_dy')}", indent=2),
+                    line("cloth z/contact", f"{values('cloth_z')} / {word('cloth_contact')}", indent=2),
                     line("wiping", word("wiping")),
-                    line("coverage", f"[{coverage_text}]", indent=2),
+                    line("coverage", word("coverage"), indent=2),
+                    line("coverage ratio", values("coverage_ratio"), indent=2),
                     line("threshold", f"{_WIPE_COVERAGE_THRESHOLD:.3f}", indent=2),
                     line("ideal", f"{_WIPE_IDEAL_COVERAGE_RATIO:.3f}", indent=2),
                     line(
@@ -436,9 +479,13 @@ class DiningCleanupStateMachine(StateMachineBase):
                         f"{_WIPE_REQUIRED_IDEAL_FRACTION:.0%}",
                         indent=2,
                     ),
+                    line("tray_dist", values("tray_dist")),
                     line("tray_stable", word("tray_stable")),
                     line("protected", word("protected")),
+                    line("tissue_dist", values("tissue_dist"), indent=2),
+                    line("vase_dist", values("vase_dist"), indent=2),
                     line("no_non_tableware_fall", word("no_non_tableware_fall")),
+                    line("min non-tableware z", values("non_tableware_min_z"), indent=2),
                     line("overall", word("overall")),
                 ]
             ),

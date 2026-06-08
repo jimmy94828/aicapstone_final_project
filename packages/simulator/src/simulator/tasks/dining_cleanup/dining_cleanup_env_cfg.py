@@ -234,7 +234,7 @@ WIPE_LANES_X: tuple[float, ...] = (0.21, 0.18, 0.15, 0.11 , 0.07)
 WIPE_FINAL_XY: tuple[float, float] = (0.2, LEFT_TABLE_Y_RANGE[1])
 WIPE_REQUIRED_IDEAL_FRACTION: float = 0.70
 WIPE_COVERAGE_RESOLUTION: float = 0.01
-WIPE_CONTACT_Z_RANGE: tuple[float, float] = (0.03, 0.09)
+WIPE_CONTACT_Z_RANGE: tuple[float, float] = (0.05, 0.09)
 STATIC_OBJECT_XY_TOL: float = 0.035
 TRAY_SUCCESS_X_HALF_WIDTH: float = 0.13
 TRAY_SUCCESS_Y_HALF_WIDTH: float = 0.14
@@ -523,6 +523,15 @@ def _dining_cleanup_status(
     vase_stable = vase_dist <= static_object_xy_tol
     protected_done = torch.logical_and(tissue_stable, vase_stable)
 
+    # some values for checking the potential failure
+    bowl_tray_abs = torch.abs(bowl_pos[:, :2] - tray_pos[:, :2])
+    spoon_tray_abs = torch.abs(spoon_pos[:, :2] - tray_pos[:, :2])
+    cloth_tray_abs = torch.abs(cloth_pos[:, :2] - tray_pos[:, :2])
+    cloth_contact = torch.logical_and(
+        cloth_pos[:, 2] >= wipe_contact_z_range[0],
+        cloth_pos[:, 2] <= wipe_contact_z_range[1],
+    )
+
     overall = tableware_done
     for term in (wiping_done, protected_done):
         overall = torch.logical_and(overall, term)
@@ -540,6 +549,27 @@ def _dining_cleanup_status(
         "overall": overall,
         "coverage_ratio": coverage_ratio,
     }
+    status.update({
+        "bowl_tray_dx": bowl_tray_abs[:, 0],
+        "bowl_tray_dy": bowl_tray_abs[:, 1],
+        "spoon_tray_dx": spoon_tray_abs[:, 0],
+        "spoon_tray_dy": spoon_tray_abs[:, 1],
+        "cloth_tray_dx": cloth_tray_abs[:, 0],
+        "cloth_tray_dy": cloth_tray_abs[:, 1],
+        "cloth_z": cloth_pos[:, 2],
+        "cloth_contact": cloth_contact,
+        "tray_dist": torch.norm(
+            tray_pos[:, :2]
+            - torch.tensor(TRAY_WORLD_POS[:2], dtype=tray_pos.dtype, device=tray_pos.device),
+            dim=1,
+        ),
+        "tissue_dist": tissue_dist,
+        "vase_dist": vase_dist,
+        "non_tableware_min_z": torch.stack(
+            [tray_pos[:, 2], cloth_pos[:, 2], tissue_pos[:, 2], vase_pos[:, 2]],
+            dim=0,
+        ).amin(dim=0),
+    })
     setattr(env, "_dining_cleanup_last_status", {key: value.detach().clone() for key, value in status.items()})
     return status
 
@@ -576,27 +606,36 @@ def _print_dining_cleanup_status(prefix: str, status: dict[str, torch.Tensor]) -
     def word(name: str) -> str:
         return "success" if bool(status[name].all().item()) else "fail"
 
-    coverage_values = status["coverage_ratio"].detach().cpu().tolist()
-    coverage_text = ", ".join(f"{value:.3f}" for value in coverage_values)
+    def values(name: str) -> str:
+        return ", ".join(f"{value:.3f}" for value in status[name].detach().cpu().tolist())
+
     print(
     "\n".join(
         [
             f"{prefix} Stage Status",
             f"  Tableware : {word('tableware')}",
             f"        Bowl XY   : {word('bowl_xy')}",
+            f"        Bowl dx/dy: {values('bowl_tray_dx')} / {values('bowl_tray_dy')}",
             f"        Spoon XY  : {word('spoon_xy')}",
+            f"        Spoon dx/dy: {values('spoon_tray_dx')} / {values('spoon_tray_dy')}",
             "",
             f"  Wiping    : {word('wiping')}",
             f"        Cloth XY  : {word('cloth_xy')}",
+            f"        Cloth dx/dy: {values('cloth_tray_dx')} / {values('cloth_tray_dy')}",
+            f"        Cloth z/contact: {values('cloth_z')} / {word('cloth_contact')}",
             f"        Coverage  : {word('coverage')}",
-            f"        Ratio     : {coverage_text}",
+            f"        Ratio     : {values('coverage_ratio')}",
             f"        Threshold : {WIPE_COVERAGE_THRESHOLD:.3f}",
             f"        Ideal     : {WIPE_IDEAL_COVERAGE_RATIO:.3f}",
             f"        Required  : {WIPE_REQUIRED_IDEAL_FRACTION:.0%}",
             "",
+            f"  Tray      : dist={values('tray_dist')}",
             f"  Protected : {word('protected')}",
             f"        Tissue    : {word('tissue_stable')}",
+            f"        Tissue dist: {values('tissue_dist')}",
             f"        Vase      : {word('vase_stable')}",
+            f"        Vase dist : {values('vase_dist')}",
+            f"        Min non-tableware z: {values('non_tableware_min_z')}",
             "",
             f"Overall   : {word('overall')}",
         ]
