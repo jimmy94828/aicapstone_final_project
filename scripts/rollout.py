@@ -140,6 +140,40 @@ parser.add_argument(
         "Mirrors the mesh maintained by the DiningCleanup FSM during data generation."
     ),
 )
+parser.add_argument(
+    "--record_video",
+    action="store_true",
+    help="Record one mp4 per evaluation episode from policy camera observations.",
+)
+parser.add_argument(
+    "--video_dir",
+    type=str,
+    default="outputs/rollout/videos",
+    help="Directory for per-episode rollout videos when --record_video is set.",
+)
+parser.add_argument(
+    "--video_fps",
+    type=int,
+    default=10,
+    help="Output video FPS. Frames are sampled from environment steps.",
+)
+parser.add_argument(
+    "--video_cameras",
+    type=str,
+    default="wrist,front",
+    help="Comma-separated camera names to concatenate horizontally in videos.",
+)
+parser.add_argument(
+    "--disable_progress",
+    action="store_true",
+    help="Disable rollout progress bars and ETA output.",
+)
+parser.add_argument(
+    "--progress_interval_s",
+    type=float,
+    default=5.0,
+    help="Minimum seconds between progress bar refreshes.",
+)
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
@@ -193,6 +227,11 @@ from simulator.tasks.external import resolve_task
 from simulator.utils.object_poses_loader import load_episode_poses
 from simulator import FRANKA_JOINT_NAMES
 
+try:
+    from tqdm import tqdm as _tqdm
+except Exception:  # noqa: BLE001
+    _tqdm = None
+
 
 def setup_dual_viewports():
     """Setup dual viewports: main perspective view and GoPro camera view."""
@@ -240,6 +279,166 @@ def setup_dual_viewports():
                 print(f"Second docking attempt failed: {str(e2)}")
     else:
         print("Error: Could not find one or both viewport windows for docking.")
+
+
+class _EpisodeVideoRecorder:
+    """Per-episode mp4 recorder for rollout debugging."""
+
+    def __init__(
+        self,
+        out_dir: str,
+        fps: int = 10,
+        step_hz: int = 60,
+        camera_names: list[str] | None = None,
+    ):
+        self.out_dir = out_dir
+        self.fps = max(1, int(fps))
+        self.capture_stride = max(1, int(step_hz) // self.fps)
+        self.camera_names = camera_names or ["wrist", "front"]
+        _os.makedirs(out_dir, exist_ok=True)
+        self.proc = None
+        self.tmp_path = None
+        self._broken = False
+        self._step_counter = 0
+        self._frames = 0
+        self._idx = None
+
+    def start(self, idx: int) -> None:
+        self._idx = idx
+        self.tmp_path = _os.path.join(self.out_dir, f"ep_{idx:02d}_tmp.mp4")
+        self.proc = None
+        self._broken = False
+        self._step_counter = 0
+        self._frames = 0
+
+    def _spawn(self, width: int, height: int) -> None:
+        import subprocess as _sp
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            f"{width}x{height}",
+            "-r",
+            str(self.fps),
+            "-i",
+            "-",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            self.tmp_path,
+        ]
+        try:
+            self.proc = _sp.Popen(cmd, stdin=_sp.PIPE)
+        except (OSError, FileNotFoundError) as exc:
+            print(f"[video] ffmpeg spawn failed: {exc}", flush=True)
+            self._broken = True
+            self.proc = None
+
+    def add(self, env) -> None:
+        if self._broken or self.proc is False:
+            return
+        self._step_counter += 1
+        if self._step_counter % self.capture_stride != 0:
+            return
+        try:
+            frames = []
+            for camera_name in self.camera_names:
+                sensor = env.scene[camera_name]
+                rgb = sensor.data.output["rgb"]
+                frame = rgb.detach().cpu().numpy()[0]
+                if frame.shape[-1] > 3:
+                    frame = frame[..., :3]
+                if frame.dtype != np.uint8:
+                    if np.nanmax(frame) <= 1.0:
+                        frame = frame * 255.0
+                    frame = np.clip(frame, 0, 255).astype(np.uint8)
+                frames.append(frame)
+            frame = np.concatenate(frames, axis=1)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[video] frame grab failed: {exc}", flush=True)
+            self._broken = True
+            return
+        if self.proc is None:
+            h, w = frame.shape[:2]
+            self._spawn(w, h)
+            if self._broken or self.proc is None:
+                return
+        try:
+            self.proc.stdin.write(frame.tobytes())
+            self._frames += 1
+        except (BrokenPipeError, OSError) as exc:
+            print(f"[video] pipe broken after {self._frames} frames: {exc}", flush=True)
+            self._broken = True
+            self.proc = None
+
+    def finalize(self, outcome: str) -> None:
+        if self.proc is not None:
+            try:
+                self.proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                self.proc.wait(timeout=20)
+            except Exception:
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
+        if self.tmp_path and _os.path.exists(self.tmp_path) and self._frames > 0:
+            final_path = _os.path.join(self.out_dir, f"ep_{self._idx:02d}_{outcome}.mp4")
+            _os.replace(self.tmp_path, final_path)
+            print(f"[video] saved {final_path} ({self._frames} frames)", flush=True)
+        elif self.tmp_path and _os.path.exists(self.tmp_path):
+            _os.remove(self.tmp_path)
+        self.proc = None
+        self.tmp_path = None
+
+
+class _NoOpProgress:
+    """Fallback progress bar used when tqdm is unavailable or disabled."""
+
+    def update(self, n: int = 1) -> None:
+        pass
+
+    def set_postfix(self, *args, **kwargs) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def _make_progress(
+    *,
+    total: int | None,
+    desc: str,
+    unit: str,
+    leave: bool,
+    disable: bool,
+    mininterval: float,
+):
+    if disable or _tqdm is None:
+        return _NoOpProgress()
+    return _tqdm(
+        total=total,
+        desc=desc,
+        unit=unit,
+        leave=leave,
+        dynamic_ncols=True,
+        mininterval=max(0.1, float(mininterval)),
+    )
 
 
 class RateLimiter:
@@ -729,65 +928,153 @@ def main():
     controller = Controller()
     controller.reset()
 
-    setup_dual_viewports()
+    if args_cli.headless:
+        print("[rollout] headless mode: skipping GUI viewport setup", flush=True)
+    else:
+        setup_dual_viewports()
 
+    video_recorder = None
+    if args_cli.record_video:
+        video_cameras = [
+            name.strip() for name in args_cli.video_cameras.split(",") if name.strip()
+        ]
+        if not video_cameras:
+            raise ValueError("--video_cameras must include at least one camera name.")
+        video_recorder = _EpisodeVideoRecorder(
+            args_cli.video_dir,
+            fps=args_cli.video_fps,
+            step_hz=args_cli.step_hz,
+            camera_names=video_cameras,
+        )
+        print(
+            f"[video] recording rollout videos to {args_cli.video_dir} "
+            f"from cameras={video_cameras} at {video_recorder.fps} fps",
+            flush=True,
+        )
+
+    episode_step_total = max(1, int(round(args_cli.episode_length_s * args_cli.step_hz)))
+    if max_episode_count > 0:
+        print(
+            f"[progress] total episodes={max_episode_count}, "
+            f"episode budget={episode_step_total} steps "
+            f"({args_cli.episode_length_s:g}s at {args_cli.step_hz}Hz)",
+            flush=True,
+        )
+    else:
+        print(
+            f"[progress] open-ended eval, episode budget={episode_step_total} steps "
+            f"({args_cli.episode_length_s:g}s at {args_cli.step_hz}Hz)",
+            flush=True,
+        )
+
+    total_progress = _make_progress(
+        total=max_episode_count if max_episode_count > 0 else None,
+        desc="Evaluation",
+        unit="episode",
+        leave=True,
+        disable=args_cli.disable_progress,
+        mininterval=args_cli.progress_interval_s,
+    )
 
     success_count, episode_count = 0, 1
-    while max_episode_count <= 0 or episode_count <= max_episode_count:
-        print(f"[Evaluation] Evaluating episode {episode_count}...")
-        success, time_out = False, False
-        while simulation_app.is_running():
-            with torch.no_grad():
-                if controller.reset_state:
-                    controller.reset()
-                    policy.reset()
-                    episode_count += 1
-                    if max_episode_count <= 0 or episode_count <= max_episode_count:
-                        obs_dict = _reset_eval_episode(env, episodes, episode_count)
-                    break
+    try:
+        while max_episode_count <= 0 or episode_count <= max_episode_count:
+            print(f"[Evaluation] Evaluating episode {episode_count}...", flush=True)
+            if video_recorder is not None:
+                video_recorder.start(episode_count)
+            episode_progress = _make_progress(
+                total=episode_step_total,
+                desc=f"Episode {episode_count}",
+                unit="step",
+                leave=False,
+                disable=args_cli.disable_progress,
+                mininterval=args_cli.progress_interval_s,
+            )
+            success, time_out = False, False
+            episode_steps = 0
+            try:
+                while simulation_app.is_running():
+                    with torch.no_grad():
+                        if controller.reset_state:
+                            controller.reset()
+                            policy.reset()
+                            if video_recorder is not None:
+                                video_recorder.finalize("reset")
+                            total_progress.update(1)
+                            episode_count += 1
+                            if max_episode_count <= 0 or episode_count <= max_episode_count:
+                                obs_dict = _reset_eval_episode(env, episodes, episode_count)
+                            break
 
-                policy_obs_dict = preprocess_obs_dict(
-                    obs_dict["policy"], language_instruction
-                )
-                actions = policy.get_action(policy_obs_dict).to(env.device)
-                for action_index in range(
-                    min(args_cli.policy_action_horizon, actions.shape[0])
-                ):
-                    action = actions[action_index, :, :]
-                    if env.cfg.dynamic_reset_gripper_effort_limit:
-                        dynamic_reset_gripper_effort_limit_sim(env, teleop_device)
-                    obs_dict, _, reset_terminated, reset_time_outs, _ = env.step(action)
-                    if args_cli.show_wipe_mesh:
-                        _sync_wipe_vis_mesh(env)
-                    if reset_terminated[0]:
-                        success = True
+                        policy_obs_dict = preprocess_obs_dict(
+                            obs_dict["policy"], language_instruction
+                        )
+                        actions = policy.get_action(policy_obs_dict).to(env.device)
+                        for action_index in range(
+                            min(args_cli.policy_action_horizon, actions.shape[0])
+                        ):
+                            action = actions[action_index, :, :]
+                            if env.cfg.dynamic_reset_gripper_effort_limit:
+                                dynamic_reset_gripper_effort_limit_sim(env, teleop_device)
+                            obs_dict, _, reset_terminated, reset_time_outs, _ = env.step(action)
+                            episode_steps += 1
+                            episode_progress.update(1)
+                            if args_cli.show_wipe_mesh:
+                                _sync_wipe_vis_mesh(env)
+                            if video_recorder is not None:
+                                video_recorder.add(env)
+                            if reset_terminated[0]:
+                                success = True
+                                break
+                            if reset_time_outs[0]:
+                                time_out = True
+                                break
+                            if rate_limiter:
+                                rate_limiter.sleep(env)
+                    if success:
+                        print(f"[Evaluation] Episode {episode_count} is successful!", flush=True)
+                        _print_task_episode_status(env, f"[Evaluation] Episode {episode_count}")
+                        if video_recorder is not None:
+                            video_recorder.finalize("success")
+                        episode_count += 1
+                        success_count += 1
+                        total_progress.update(1)
+                        total_progress.set_postfix(
+                            success=f"{success_count}/{episode_count - 1}",
+                            rate=f"{success_count / (episode_count - 1):.3f}",
+                        )
+                        policy.reset()
+                        if max_episode_count <= 0 or episode_count <= max_episode_count:
+                            obs_dict = _reset_eval_episode(env, episodes, episode_count)
                         break
-                    if reset_time_outs[0]:
-                        time_out = True
+                    if time_out:
+                        print(f"[Evaluation] Episode {episode_count} timed out!", flush=True)
+                        _print_task_episode_status(env, f"[Evaluation] Episode {episode_count}")
+                        if video_recorder is not None:
+                            video_recorder.finalize("failed")
+                        episode_count += 1
+                        total_progress.update(1)
+                        total_progress.set_postfix(
+                            success=f"{success_count}/{episode_count - 1}",
+                            rate=f"{success_count / (episode_count - 1):.3f}",
+                        )
+                        policy.reset()
+                        if max_episode_count <= 0 or episode_count <= max_episode_count:
+                            obs_dict = _reset_eval_episode(env, episodes, episode_count)
                         break
-                    if rate_limiter:
-                        rate_limiter.sleep(env)
-            if success:
-                print(f"[Evaluation] Episode {episode_count} is successful!")
-                _print_task_episode_status(env, f"[Evaluation] Episode {episode_count}")
-                episode_count += 1
-                success_count += 1
-                policy.reset()
-                if max_episode_count <= 0 or episode_count <= max_episode_count:
-                    obs_dict = _reset_eval_episode(env, episodes, episode_count)
-                break
-            if time_out:
-                print(f"[Evaluation] Episode {episode_count} timed out!")
-                _print_task_episode_status(env, f"[Evaluation] Episode {episode_count}")
-                episode_count += 1
-                policy.reset()
-                if max_episode_count <= 0 or episode_count <= max_episode_count:
-                    obs_dict = _reset_eval_episode(env, episodes, episode_count)
-                break
-        print(
-            f"[Evaluation] now success rate: {success_count / (episode_count - 1)} "
-            f" [{success_count}/{episode_count - 1}]"
-        )
+            finally:
+                if episode_steps:
+                    episode_progress.set_postfix(steps=episode_steps)
+                episode_progress.close()
+            evaluated = max(episode_count - 1, 0)
+            rate = success_count / evaluated if evaluated > 0 else 0.0
+            print(
+                f"[Evaluation] now success rate: {rate:.3f} "
+                f" [{success_count}/{evaluated}]",
+                flush=True,
+            )
+    finally:
+        total_progress.close()
 
     if max_episode_count > 0:
         print(
