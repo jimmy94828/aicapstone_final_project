@@ -5,12 +5,11 @@ set -euo pipefail
 WORKSPACE="$(cd "$(dirname "$0")" && pwd)"
 IMAGE="leisaac-isaaclab:latest"
 HF_USER="AI-Final"
-VERSION="v1-15"
-DATASET_REPO_ID="${HF_USER}/AI-aiCapstoneData-lerobot-advanced-${VERSION}"
-TASK_ID="HCIS-DiningCleanup-SingleArm-v0"
-OBJECT_POSES="data/dining_clean/dining_cleanup_object_poses_100.json"
+DATASET_REPO_ID="${HF_USER}/AI-aiCapstoneData-lerobot-cutlery-v7-2-300"
+TASK_ID="HCIS-CutleryArrangement-SingleArm-v0"
+OBJECT_POSES="data/umi/augmented_300/augmented_300.json"
 HF_TOKEN=""
-LOG="${WORKSPACE}/datagen_advanced_${VERSION}.log"
+LOG="${WORKSPACE}/datagen_v7-2-300.log"
 
 # Resolve Vulkan ICD (same logic as Makefile)
 VK_ICD=""
@@ -28,13 +27,14 @@ echo "Object poses: ${OBJECT_POSES}" | tee -a "$LOG"
 date | tee -a "$LOG"
 
 docker run --rm \
-    --name isaaclab-datagen-advanced-${VERSION} \
+    --name isaaclab-datagen-v7-2-300 \
     --gpus '"device=all"' \
     --net=host \
     --ipc=host \
     --ulimit memlock=-1 \
     --ulimit stack=67108864 \
     -v "${WORKSPACE}:/workspace/aicapstone" \
+    -v "/workspace/aicapstone/.venv" \
     -v "/home/threedavatar/.cache/huggingface:/root/.cache/huggingface" \
     ${VK_ICD:+-v "${VK_ICD%/*}:${VK_ICD%/*}:ro"} \
     -v "/usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro" \
@@ -44,7 +44,7 @@ docker run --rm \
     -e NVIDIA_DRIVER_CAPABILITIES=graphics,display,utility,compute \
     -e HF_TOKEN="${HF_TOKEN}" \
     -e HF_USER="${HF_USER}" \
-    -e DATAGEN_VIDEO_DIR=/workspace/aicapstone/datagen_advanced_${VERSION}/videos \
+    -e DATAGEN_VIDEO_DIR=/workspace/aicapstone/datagen_v7-2-300_preview/videos \
     "${IMAGE}" \
     bash -lc "
         set -euo pipefail

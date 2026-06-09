@@ -245,8 +245,8 @@ class CutleryArrangementStateMachine(StateMachineBase):
         done = torch.logical_and(done, fork_dist_xy <= _SUCCESS_MAX_DIST_XY)
         done = torch.logical_and(done, knife_dist_xy <= _SUCCESS_MAX_DIST_XY)
 
-        done = torch.logical_and(done, fork_pos[:, 0] > plate_pos[:, 0])   # fork on +x
-        done = torch.logical_and(done, knife_pos[:, 0] < plate_pos[:, 0])  # knife on -x
+        done = torch.logical_and(done, fork_pos[:, 0] < plate_pos[:, 0])   # fork on +x
+        done = torch.logical_and(done, knife_pos[:, 0] > plate_pos[:, 0])  # knife on -x
 
         # z difference check
         Z_threshold = 0.03

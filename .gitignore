@@ -38,3 +38,8 @@ datasets/*
 # Private external task files
 private_tasks/*
 !private_tasks/.gitkeep
+
+datagen_*/
+log/*
+experiments/*
+experiments/train.log
