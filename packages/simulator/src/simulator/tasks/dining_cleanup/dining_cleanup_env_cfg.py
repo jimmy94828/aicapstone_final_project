@@ -1,4 +1,7 @@
+import json
 import math
+import os
+from pathlib import Path
 
 import isaaclab.sim as sim_utils
 import isaaclab.sim.schemas as sim_schemas
@@ -30,14 +33,60 @@ import numpy as _np
 
 
 DINING_OBJECTS_ROOT = ASSETS_ROOT / "scenes" / "dining_room" / "objects"
-BOWL_USD_PATH = DINING_OBJECTS_ROOT / "bowl" / "model_BalandaBowl_69323.usd"
-SPOON_USD_PATH = DINING_OBJECTS_ROOT / "spoon" / "model_Kitchen_Spoon_B008H2JLP8_LargeWooden_69323.usd"
+_DINING_CLEANUP_CONFIG_PATH = os.environ.get("DINING_CLEANUP_CONFIG", "")
+
+
+def _load_dining_cleanup_config() -> dict:
+    if not _DINING_CLEANUP_CONFIG_PATH:
+        return {}
+    path = Path(_DINING_CLEANUP_CONFIG_PATH).expanduser()
+    if not path.is_file():
+        raise FileNotFoundError(f"DINING_CLEANUP_CONFIG does not exist: {path}")
+    with path.open("r") as f:
+        config = json.load(f)
+    if not isinstance(config, dict):
+        raise ValueError(f"{path}: expected top-level JSON object")
+    print(f"[DiningCleanupCfg] loaded {path}", flush=True)
+    return config
+
+
+def _config_asset_path(config: dict, object_name: str, default: Path) -> Path:
+    value = config.get("assets", {}).get(object_name, {}).get("usd_path")
+    if not value:
+        return default
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path
+    return ASSETS_ROOT / path
+
+
+def _config_scale(config: dict, object_name: str, default: tuple[float, float, float]) -> tuple[float, float, float]:
+    value = config.get("assets", {}).get(object_name, {}).get("scale")
+    if value is None:
+        return default
+    if not isinstance(value, list | tuple) or len(value) != 3:
+        raise ValueError(f"DINING_CLEANUP_CONFIG assets.{object_name}.scale must be a length-3 list")
+    return (float(value[0]), float(value[1]), float(value[2]))
+
+
+_DINING_CLEANUP_CONFIG = _load_dining_cleanup_config()
+
+BOWL_USD_PATH = _config_asset_path(
+    _DINING_CLEANUP_CONFIG,
+    "bowl",
+    DINING_OBJECTS_ROOT / "bowl" / "model_BalandaBowl_69323.usd",
+)
+SPOON_USD_PATH = _config_asset_path(
+    _DINING_CLEANUP_CONFIG,
+    "spoon",
+    DINING_OBJECTS_ROOT / "spoon" / "model_Kitchen_Spoon_B008H2JLP8_LargeWooden_69323.usd",
+)
 TRAY_USD_PATH = DINING_OBJECTS_ROOT / "tray" / "model_WhiteUtensilTray_69323.usd"
 TISSUE_USD_PATH = DINING_OBJECTS_ROOT / "tissue" / "model_tissue_001_69323.usd"
 VASE_USD_PATH = DINING_OBJECTS_ROOT / "vase" / "model_B07JLBDT51_69323.usd"
 
-BOWL_SCALE: tuple[float, float, float] = (0.5, 0.5, 0.5)
-SPOON_SCALE: tuple[float, float, float] = (0.6, 0.6, 0.6)
+BOWL_SCALE: tuple[float, float, float] = _config_scale(_DINING_CLEANUP_CONFIG, "bowl", (0.5, 0.5, 0.5))
+SPOON_SCALE: tuple[float, float, float] = _config_scale(_DINING_CLEANUP_CONFIG, "spoon", (0.6, 0.6, 0.6))
 TRAY_SCALE: tuple[float, float, float] = (0.79, 1.77, 1.0)
 TISSUE_SCALE: tuple[float, float, float] = (1.0, 1.0, 1.0)
 VASE_SCALE_FACTOR: float = 0.100 / 0.169244

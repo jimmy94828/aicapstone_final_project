@@ -41,6 +41,12 @@ FOOTPRINT_SIZE = {
     "vase": (0.100, 0.100),
     "cloth": (0.055, 0.115),
 }
+OBJECT_LABELS = {
+    "bowl": "bowl",
+    "spoon": "spoon",
+}
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ASSET_ROOT = PROJECT_ROOT / "packages" / "simulator" / "assets"
 
 DEFAULT_INPUT = Path("data/dining_clean/dining_cleanup_spoon_random_yaw_200.json")
 DEFAULT_OUTPUT_DIR = Path("data/dining_clean/spoon_random_yaw_first10")
@@ -72,6 +78,59 @@ def load_full_entries(path: Path) -> list[dict]:
     return [entry for entry in data if entry.get("status") == "full"]
 
 
+def resolve_repo_path(path: str | Path) -> Path:
+    value = Path(path).expanduser()
+    if value.is_absolute():
+        return value
+    return PROJECT_ROOT / value
+
+
+def resolve_asset_path(path: str | Path) -> Path:
+    value = Path(path).expanduser()
+    if value.is_absolute():
+        return value
+    return ASSET_ROOT / value
+
+
+def usd_xy_footprint(usd_path: Path, scale: list[float]) -> tuple[float, float]:
+    from pxr import Usd, UsdGeom
+
+    stage = Usd.Stage.Open(str(usd_path))
+    if stage is None:
+        raise FileNotFoundError(f"Could not open USD asset: {usd_path}")
+    prim = stage.GetDefaultPrim()
+    if not prim or not prim.IsValid():
+        prim = stage.GetPseudoRoot()
+    cache = UsdGeom.BBoxCache(
+        Usd.TimeCode.Default(),
+        [UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
+    )
+    bbox = cache.ComputeWorldBound(prim).ComputeAlignedBox()
+    min_pt = bbox.GetMin()
+    max_pt = bbox.GetMax()
+    return (
+        float(max_pt[0] - min_pt[0]) * float(scale[0]),
+        float(max_pt[1] - min_pt[1]) * float(scale[1]),
+    )
+
+
+def apply_dining_cleanup_config(config_path: Path) -> tuple[Path | None, str]:
+    config = json.loads(config_path.read_text())
+    config_name = str(config.get("name") or config_path.stem)
+    assets = config.get("assets", {})
+    for scene_name in ("bowl", "spoon"):
+        asset_cfg = assets.get(scene_name, {})
+        label = asset_cfg.get("asset_label")
+        if label:
+            OBJECT_LABELS[scene_name] = str(label)
+        usd_path = asset_cfg.get("usd_path")
+        scale = asset_cfg.get("scale")
+        if usd_path and scale:
+            FOOTPRINT_SIZE[scene_name] = usd_xy_footprint(resolve_asset_path(usd_path), scale)
+    object_poses = config.get("object_poses")
+    return (resolve_repo_path(object_poses) if object_poses else None), config_name
+
+
 def entry_pose(entry: dict, name: str) -> tuple[tuple[float, float], float]:
     obj = next(obj for obj in entry["objects"] if obj["object_name"] == name)
     xy = raw_to_world_xy(obj["tvec"][:2])
@@ -81,6 +140,7 @@ def entry_pose(entry: dict, name: str) -> tuple[tuple[float, float], float]:
 
 def add_axis_aligned_object(ax, name: str, xy: tuple[float, float], color: str) -> None:
     sx, sy = FOOTPRINT_SIZE[name]
+    label = OBJECT_LABELS.get(name, name)
     ax.add_patch(
         Rectangle(
             (xy[0] - sx / 2.0, xy[1] - sy / 2.0),
@@ -94,7 +154,7 @@ def add_axis_aligned_object(ax, name: str, xy: tuple[float, float], color: str) 
         )
     )
     ax.scatter([xy[0]], [xy[1]], s=70, color=color, edgecolor="black", linewidth=0.8, zorder=5)
-    ax.text(xy[0] + 0.010, xy[1] + 0.010, name, fontsize=8, weight="bold", zorder=7)
+    ax.text(xy[0] + 0.010, xy[1] + 0.010, label, fontsize=8, weight="bold", zorder=7)
 
 
 def add_oriented_object(
@@ -107,6 +167,7 @@ def add_oriented_object(
     show_long_axis: bool = False,
 ) -> None:
     sx, sy = FOOTPRINT_SIZE[name]
+    label = OBJECT_LABELS.get(name, name)
     rect = Rectangle(
         (xy[0] - sx / 2.0, xy[1] - sy / 2.0),
         sx,
@@ -144,14 +205,14 @@ def add_oriented_object(
         ax.text(
             xy[0] + 0.012,
             xy[1] - 0.025,
-            f"spoon yaw={math.degrees(yaw):+.1f} deg",
+            f"{label} yaw={math.degrees(yaw):+.1f} deg",
             fontsize=8,
             color="#7f1d1d",
             weight="bold",
             zorder=11,
         )
     else:
-        ax.text(xy[0] + 0.012, xy[1] + 0.012, name, fontsize=8, weight="bold", zorder=10)
+        ax.text(xy[0] + 0.012, xy[1] + 0.012, label, fontsize=8, weight="bold", zorder=10)
 
 
 def cloth_expected_path() -> list[tuple[float, float]]:
@@ -201,7 +262,13 @@ def add_scene_context(ax) -> None:
     add_axis_aligned_object(ax, "cloth", CLOTH_WORLD_POS, "#6b7cff")
 
 
-def plot_episode(entry: dict, output: Path, episode_number: int) -> tuple[float, float, float]:
+def plot_episode(
+    entry: dict,
+    output: Path,
+    episode_number: int,
+    *,
+    config_name: str,
+) -> tuple[float, float, float]:
     bowl_xy, bowl_yaw = entry_pose(entry, "bowl")
     spoon_xy, spoon_yaw = entry_pose(entry, "spoon")
 
@@ -211,7 +278,7 @@ def plot_episode(entry: dict, output: Path, episode_number: int) -> tuple[float,
     add_oriented_object(ax, "spoon", spoon_xy, spoon_yaw, "#d64545", show_long_axis=True)
 
     ax.set_title(
-        f"Dining Cleanup Pose Episode {episode_number:03d}",
+        f"{config_name} | Pose Episode {episode_number:03d}",
         fontsize=13,
         weight="bold",
     )
@@ -232,8 +299,9 @@ def plot_episode(entry: dict, output: Path, episode_number: int) -> tuple[float,
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Visualize individual dining cleanup pose samples.")
-    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="Input object_poses JSON.")
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Output image directory.")
+    parser.add_argument("--config", type=Path, default=None, help="Optional Dining Cleanup config JSON.")
+    parser.add_argument("--input", type=Path, default=None, help="Input object_poses JSON.")
+    parser.add_argument("--output-dir", type=Path, default=None, help="Output image directory.")
     parser.add_argument("--start", type=int, default=1, help="1-based first full episode to visualize.")
     parser.add_argument("--count", type=int, default=10, help="Number of full episodes to visualize.")
     return parser.parse_args()
@@ -241,19 +309,37 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    entries = load_full_entries(args.input)
+    config_name = "Dining Cleanup"
+    config_input = None
+    if args.config is not None:
+        config_input, config_name = apply_dining_cleanup_config(resolve_repo_path(args.config))
+    input_path = resolve_repo_path(args.input) if args.input is not None else config_input or resolve_repo_path(DEFAULT_INPUT)
+    output_dir = (
+        resolve_repo_path(args.output_dir)
+        if args.output_dir is not None
+        else resolve_repo_path(Path("data/dining_clean") / f"{config_name}_first10")
+        if args.config is not None
+        else resolve_repo_path(DEFAULT_OUTPUT_DIR)
+    )
+
+    entries = load_full_entries(input_path)
     start_index = max(args.start - 1, 0)
     selected = entries[start_index : start_index + args.count]
     if not selected:
-        raise ValueError(f"No full episodes selected from {args.input}")
+        raise ValueError(f"No full episodes selected from {input_path}")
 
     for offset, entry in enumerate(selected):
         episode_number = start_index + offset + 1
-        output = args.output_dir / f"pose_ep_{episode_number:03d}.png"
-        bowl_yaw, spoon_yaw, pair_dist = plot_episode(entry, output, episode_number)
+        output = output_dir / f"pose_ep_{episode_number:03d}.png"
+        bowl_yaw, spoon_yaw, pair_dist = plot_episode(
+            entry,
+            output,
+            episode_number,
+            config_name=config_name,
+        )
         print(
             f"{output} | bowl_yaw={math.degrees(bowl_yaw):+6.1f} deg, "
-            f"spoon_yaw={math.degrees(spoon_yaw):+6.1f} deg, "
+            f"{OBJECT_LABELS['spoon']}_yaw={math.degrees(spoon_yaw):+6.1f} deg, "
             f"bowl_spoon_dist={pair_dist:.3f} m"
         )
 

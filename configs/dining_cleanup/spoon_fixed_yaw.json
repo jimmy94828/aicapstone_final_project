@@ -1,0 +1,23 @@
+{
+  "name": "spoon_fixed_yaw",
+  "description": "Default Dining Cleanup scene with original bowl/spoon assets and fixed spoon yaw.",
+  "task": "HCIS-DiningCleanup-SingleArm-v0",
+  "object_poses": "data/dining_clean/dining_cleanup_object_poses_500.json",
+  "assets": {
+    "bowl": {
+      "usd_path": "scenes/dining_room/objects/bowl/model_BalandaBowl_69323.usd",
+      "scale": [0.5, 0.5, 0.5]
+    },
+    "spoon": {
+      "usd_path": "scenes/dining_room/objects/spoon/model_Kitchen_Spoon_B008H2JLP8_LargeWooden_69323.usd",
+      "scale": [0.6, 0.6, 0.6]
+    }
+  },
+  "pose_generation": {
+    "spoon_yaw_mode": "fixed",
+    "spoon_fixed_world_yaw_rad": 0.7853981633974483,
+    "spoon_fixed_world_yaw_deg": 45.0,
+    "spoon_placement_mode": "relative",
+    "allow_bowl_spoon_overlap": false
+  }
+}

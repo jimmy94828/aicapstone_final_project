@@ -21,6 +21,7 @@
 | object pose generator | `scripts/generate_dining_cleanup_object_poses.py` |
 | object pose visualization | `scripts/visualize_dining_cleanup_layout.py` |
 | dataset 生成整理 | `docs/dining_cleanup/dataset_generation.md` |
+| evaluation config 整理 | `docs/dining_cleanup/evaluation_configs.md` |
 | 預設 500 筆 pose | `data/dining_clean/dining_cleanup_object_poses_500.json` |
 | 目前視覺化輸出 | `data/dining_clean/dining_cleanup_layout_xy.png` |
 

@@ -21,9 +21,11 @@ if multiprocessing.get_start_method() != "spawn":
     multiprocessing.set_start_method("spawn", force=True)
 
 import argparse
+import json
 import os
 import signal
 import time
+from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
@@ -40,8 +42,14 @@ parser.add_argument("--resume", action="store_true", help="Whether to resume rec
 parser.add_argument(
     "--object_poses",
     type=str,
-    required=True,
+    default=None,
     help="Path to the per-episode object_poses.json (UMI schema). Episode count = number of status=='full' entries.",
+)
+parser.add_argument(
+    "--dining_cleanup_config",
+    type=str,
+    default=None,
+    help="Optional Dining Cleanup JSON config. Provides asset/scale overrides and a default object_poses path.",
 )
 parser.add_argument("--quality", action="store_true", help="Whether to enable quality render mode.")
 parser.add_argument("--use_lerobot_recorder", action="store_true", help="Whether to use lerobot recorder.")
@@ -50,6 +58,17 @@ parser.add_argument("--lerobot_dataset_fps", type=int, default=30, help="Lerobot
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+
+if args_cli.dining_cleanup_config:
+    config_path = Path(args_cli.dining_cleanup_config).expanduser()
+    os.environ["DINING_CLEANUP_CONFIG"] = str(config_path)
+    with config_path.open("r") as f:
+        dining_cleanup_config = json.load(f)
+    if args_cli.object_poses is None and dining_cleanup_config.get("object_poses"):
+        args_cli.object_poses = dining_cleanup_config["object_poses"]
+    print(f"[datagen] using Dining Cleanup config: {config_path}", flush=True)
+    if args_cli.object_poses:
+        print(f"[datagen] object_poses: {args_cli.object_poses}", flush=True)
 
 app_launcher_args = vars(args_cli)
 app_launcher = AppLauncher(app_launcher_args)
@@ -430,6 +449,8 @@ def main():
             f"Task '{task_name}' env_cfg has no 'object_pose_cfg' attribute; "
             "cannot resolve anchor frame for --object_poses."
         )
+    if args_cli.object_poses is None:
+        raise ValueError("Provide --object_poses or use --dining_cleanup_config with an object_poses field.")
     episodes = load_episode_poses(args_cli.object_poses, env_cfg.object_pose_cfg)
     if not episodes:
         raise ValueError(

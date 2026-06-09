@@ -1,0 +1,26 @@
+{
+  "name": "fork_bowl2_scaled",
+  "description": "Dining Cleanup asset-shift config: replace spoon with wooden_fork and bowl with bowl_2, then scale both objects.",
+  "task": "HCIS-DiningCleanup-SingleArm-v0",
+  "object_poses": "data/dining_clean/dining_cleanup_fork_bowl2_scaled_200.json",
+  "assets": {
+    "bowl": {
+      "asset_label": "bowl2",
+      "usd_path": "scenes/dining_room/objects/bowl_2/model_B075HWDSDK_69323.usd",
+      "scale": [0.52, 0.52, 0.52]
+    },
+    "spoon": {
+      "asset_label": "wooden_fork",
+      "usd_path": "scenes/dining_room/objects/wooden_fork/model_WoodenFork_69323.usd",
+      "scale": [0.62, 0.62, 0.62]
+    }
+  },
+  "pose_generation": {
+    "spoon_yaw_mode": "fixed",
+    "spoon_fixed_world_yaw_rad": 0.7853981633974483,
+    "spoon_fixed_world_yaw_deg": 45.0,
+    "spoon_placement_mode": "relative",
+    "allow_bowl_spoon_overlap": false,
+    "note": "The scene key remains 'spoon' so existing FSM, object_poses, and success checks continue to work; the visual/physical asset is wooden_fork."
+  }
+}

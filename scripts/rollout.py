@@ -12,6 +12,7 @@
 """Launch Isaac Sim Simulator first."""
 import json as _json
 import multiprocessing
+import os as _os
 from pathlib import Path as _Path
 
 
@@ -81,6 +82,12 @@ parser.add_argument(
     help="Optional per-episode object_poses.json used to reset evaluation layouts.",
 )
 parser.add_argument(
+    "--dining_cleanup_config",
+    type=str,
+    default=None,
+    help="Optional Dining Cleanup JSON config. Provides asset/scale overrides and a default object_poses path.",
+)
+parser.add_argument(
     "--step_hz", type=int, default=60, help="Environment stepping rate in Hz."
 )
 parser.add_argument("--seed", type=int, default=None, help="Seed of the environment.")
@@ -136,6 +143,17 @@ parser.add_argument(
 
 AppLauncher.add_app_launcher_args(parser)
 args_cli = parser.parse_args()
+
+if args_cli.dining_cleanup_config:
+    config_path = _Path(args_cli.dining_cleanup_config).expanduser()
+    _os.environ["DINING_CLEANUP_CONFIG"] = str(config_path)
+    with config_path.open("r") as f:
+        dining_cleanup_config = _json.load(f)
+    if args_cli.object_poses is None and dining_cleanup_config.get("object_poses"):
+        args_cli.object_poses = dining_cleanup_config["object_poses"]
+    print(f"[rollout] using Dining Cleanup config: {config_path}", flush=True)
+    if args_cli.object_poses:
+        print(f"[rollout] object_poses: {args_cli.object_poses}", flush=True)
 
 app_launcher = AppLauncher(vars(args_cli))
 simulation_app = app_launcher.app
