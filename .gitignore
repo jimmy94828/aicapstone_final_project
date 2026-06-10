@@ -13,7 +13,7 @@ dist/
 .vscode/
 
 # Runtime directories
-data/*
+# data/*
 !data/.gitkeep
 checkpoints/*
 !checkpoints/.gitkeep
@@ -26,6 +26,7 @@ packages/simulator/**/wandb/
 packages/umi/.cache/
 
 # IsaacLab submodule build artifacts
+dependencies/
 dependencies/IsaacLab/logs/
 dependencies/IsaacLab/outputs/
 dependencies/IsaacLab/_isaac_sim
@@ -42,4 +43,4 @@ private_tasks/*
 datagen_*/
 log/*
 experiments/*
-experiments/train.log
+!experiments/structure.md
