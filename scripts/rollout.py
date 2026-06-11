@@ -542,8 +542,7 @@ class LeRobotSyncPolicy:
                 f"Task type {task_type} not supported for synchronous LeRobot inference yet."
             )
 
-        self.lerobot_features = self._build_lerobot_features(camera_infos)
-        self.camera_keys = list(camera_infos.keys())
+        self.env_camera_keys = list(camera_infos.keys())
 
         print(
             f"Loading local LeRobot policy '{policy_type}' from {pretrained_name_or_path}...",
@@ -557,6 +556,12 @@ class LeRobotSyncPolicy:
         self.policy = policy_class.from_pretrained(pretrained_name_or_path, local_files_only=True)
         self.policy.to(device)
         self.policy.eval()
+        self.camera_feature_map = self._map_camera_features(
+            camera_infos, self.policy.config.image_features
+        )
+        self.lerobot_features = self._build_lerobot_features(
+            camera_infos, self.camera_feature_map
+        )
 
         device_override = {"device": device}
         self.preprocessor, self.postprocessor = make_pre_post_processors(
@@ -577,7 +582,9 @@ class LeRobotSyncPolicy:
                 policy_reset()
 
     def _build_lerobot_features(
-        self, camera_infos: dict[str, tuple[int, int]]
+        self,
+        camera_infos: dict[str, tuple[int, int]],
+        camera_feature_map: dict[str, str],
     ) -> dict[str, dict]:
         features = {
             "observation.state": {
@@ -586,19 +593,71 @@ class LeRobotSyncPolicy:
                 "names": [f"{joint_name}.pos" for joint_name in self.state_joint_names],
             }
         }
-        for camera_key, camera_image_shape in camera_infos.items():
-            features[f"observation.images.{camera_key}"] = {
+        for feature_key, camera_key in camera_feature_map.items():
+            camera_image_shape = camera_infos[camera_key]
+            features[feature_key] = {
                 "dtype": "image",
                 "shape": (camera_image_shape[0], camera_image_shape[1], 3),
                 "names": ["height", "width", "channels"],
             }
         return features
 
+    def _map_camera_features(
+        self,
+        camera_infos: dict[str, tuple[int, int]],
+        policy_image_features: dict[str, Any],
+    ) -> dict[str, str]:
+        """Map checkpoint image feature names to available env camera names."""
+        policy_feature_keys = list(policy_image_features.keys())
+        if not policy_feature_keys:
+            policy_feature_keys = [
+                f"observation.images.{camera_key}" for camera_key in camera_infos
+            ]
+
+        camera_keys = list(camera_infos.keys())
+        if not camera_keys:
+            raise ValueError("No camera observations are available for policy inference.")
+
+        camera_feature_map: dict[str, str] = {}
+        for index, feature_key in enumerate(policy_feature_keys):
+            suffix = feature_key.split("observation.images.", 1)[-1]
+            matched_camera = None
+            for camera_key in camera_keys:
+                if (
+                    suffix == camera_key
+                    or suffix.endswith(f".{camera_key}")
+                    or suffix.endswith(f"_{camera_key}")
+                    or camera_key in suffix
+                ):
+                    matched_camera = camera_key
+                    break
+            if matched_camera is None:
+                matched_camera = camera_keys[min(index, len(camera_keys) - 1)]
+            camera_feature_map[feature_key] = matched_camera
+
+        print(
+            "[rollout] policy image features: "
+            + ", ".join(policy_feature_keys),
+            flush=True,
+        )
+        print(
+            "[rollout] camera feature map: "
+            + ", ".join(
+                f"{feature_key} <- {camera_key}"
+                for feature_key, camera_key in camera_feature_map.items()
+            ),
+            flush=True,
+        )
+        return camera_feature_map
+
     def _build_raw_observation(self, observation_dict: dict) -> dict[str, Any]:
-        raw_observation = {
-            key: observation_dict[key].cpu().numpy().astype(np.uint8)[0]
-            for key in self.camera_keys
-        }
+        raw_observation = {}
+        for feature_key, camera_key in self.camera_feature_map.items():
+            frame = observation_dict[camera_key].cpu().numpy().astype(np.uint8)[0]
+            raw_key = feature_key.split("observation.images.", 1)[-1]
+            raw_observation[raw_key] = frame
+            raw_observation[feature_key] = frame
+            raw_observation[camera_key] = frame
         raw_observation["task"] = observation_dict["task_description"]
 
         if self.task_type == "so101leader":
