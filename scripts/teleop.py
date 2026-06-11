@@ -8,7 +8,10 @@ import multiprocessing
 if multiprocessing.get_start_method() != "spawn":
     multiprocessing.set_start_method("spawn", force=True)
 import argparse
+import json
+import os
 import signal
+from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
@@ -66,6 +69,12 @@ parser.add_argument(
     default=None,
     help="Path to the per-episode object_poses.json (UMI schema). Episode count = number of status=='full' entries.",
 )
+parser.add_argument(
+    "--dining_cleanup_config",
+    type=str,
+    default=None,
+    help="Optional Dining Cleanup JSON config. Provides asset/scale overrides and a default object_poses path.",
+)
 parser.add_argument("--recalibrate", action="store_true", help="recalibrate SO101-Leader or Bi-SO101Leader")
 parser.add_argument("--quality", action="store_true", help="whether to enable quality render mode.")
 parser.add_argument("--use_lerobot_recorder", action="store_true", help="whether to use lerobot recorder.")
@@ -77,13 +86,23 @@ AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli = parser.parse_args()
 
+if args_cli.dining_cleanup_config:
+    config_path = Path(args_cli.dining_cleanup_config).expanduser()
+    os.environ["DINING_CLEANUP_CONFIG"] = str(config_path)
+    with config_path.open("r") as f:
+        dining_cleanup_config = json.load(f)
+    if args_cli.object_poses is None and dining_cleanup_config.get("object_poses"):
+        args_cli.object_poses = dining_cleanup_config["object_poses"]
+    print(f"[teleop] using Dining Cleanup config: {config_path}", flush=True)
+    if args_cli.object_poses:
+        print(f"[teleop] object_poses: {args_cli.object_poses}", flush=True)
+
 app_launcher_args = vars(args_cli)
 
 # launch omniverse app
 app_launcher = AppLauncher(app_launcher_args)
 simulation_app = app_launcher.app
 
-import os
 import time
 
 import numpy as np

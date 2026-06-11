@@ -129,8 +129,7 @@ python scripts/rollout.py \
   --device=cuda \
   --enable_cameras \
   --eval_rounds=50 \
-  --episode_length_s=60 \
-  --seed=2026060903
+  --episode_length_s=60
 ```
 
 如果你想臨時覆蓋 config 裡的 pose split，可以額外加：

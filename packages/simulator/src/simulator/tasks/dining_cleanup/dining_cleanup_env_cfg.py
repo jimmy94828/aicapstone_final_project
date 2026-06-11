@@ -173,6 +173,20 @@ def _ensure_rigid_object_schemas(root_prim: Usd.Prim) -> None:
     if not root_prim.IsValid():
         raise RuntimeError(f"Cannot apply rigid object schemas to invalid prim: {root_prim}")
 
+    # Some replacement assets, such as bowl_2 and wooden_fork, already carry a
+    # RigidBodyAPI on a child prim inside the referenced USD.  Isaac Lab
+    # RigidObject requires exactly one rigid body under the configured prim
+    # path, so keep the root as the single body and strip descendant bodies.
+    for prim in Usd.PrimRange(root_prim):
+        if prim == root_prim:
+            continue
+        if prim.HasAPI(UsdPhysics.RigidBodyAPI):
+            prim.RemoveAPI(UsdPhysics.RigidBodyAPI)
+        if prim.HasAPI(PhysxSchema.PhysxRigidBodyAPI):
+            prim.RemoveAPI(PhysxSchema.PhysxRigidBodyAPI)
+        if prim.HasAPI(UsdPhysics.MassAPI):
+            prim.RemoveAPI(UsdPhysics.MassAPI)
+
     UsdPhysics.RigidBodyAPI.Apply(root_prim)
     PhysxSchema.PhysxRigidBodyAPI.Apply(root_prim)
     UsdPhysics.MassAPI.Apply(root_prim)
