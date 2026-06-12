@@ -18,7 +18,7 @@ evaluation。
 Task id:
 
 ```bash
-HCIS-DiningCleanup-SingleArm-v0
+LeIsaac-HCIS-DiningCleanup-SingleArm-v0
 ```
 
 ## 2. Dataset 生成核心概念
@@ -193,7 +193,7 @@ Dataset A:
 
 ```bash
 python scripts/datagen/generate.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
   --num_envs 1 \
   --device cuda \
   --enable_cameras \
@@ -206,7 +206,7 @@ Dataset B:
 
 ```bash
 python scripts/datagen/generate.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
   --num_envs 1 \
   --device cuda \
   --enable_cameras \
@@ -231,7 +231,7 @@ Dataset A:
 
 ```bash
 python scripts/rollout.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
   --policy_type=lerobot-<policy_name> \
   --policy_checkpoint_path=<path/to/checkpoint> \
   --policy_action_horizon=1 \
@@ -247,7 +247,7 @@ Dataset B:
 
 ```bash
 python scripts/rollout.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
   --policy_type=lerobot-<policy_name> \
   --policy_checkpoint_path=<path/to/checkpoint> \
   --policy_action_horizon=1 \

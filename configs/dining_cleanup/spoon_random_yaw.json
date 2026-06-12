@@ -1,7 +1,7 @@
 {
   "name": "spoon_random_yaw",
   "description": "Default Dining Cleanup scene with original bowl/spoon assets and randomized spoon yaw.",
-  "task": "HCIS-DiningCleanup-SingleArm-v0",
+  "task": "LeIsaac-HCIS-DiningCleanup-SingleArm-v0",
   "object_poses": "data/dining_clean/dining_cleanup_spoon_random_yaw_200.json",
   "assets": {
     "bowl": {

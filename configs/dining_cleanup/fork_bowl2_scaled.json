@@ -1,7 +1,7 @@
 {
   "name": "fork_bowl2_scaled",
   "description": "Dining Cleanup asset-shift config: replace spoon with wooden_fork and bowl with bowl_2, then scale both objects.",
-  "task": "HCIS-DiningCleanup-SingleArm-v0",
+  "task": "LeIsaac-HCIS-DiningCleanup-SingleArm-v0",
   "object_poses": "data/dining_clean/dining_cleanup_fork_bowl2_scaled_200.json",
   "assets": {
     "bowl": {

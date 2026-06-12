@@ -1,181 +1,327 @@
 # Dining Cleanup Advanced Project
 
-本文件整理 advanced project 中 `Dining Cleanup` 任務的設計與執行方式，涵蓋四個主要部分：
+This document is the implementation and reproduction guide for the Advanced-level
+Dining Cleanup task.
 
-1. FSM 軌跡生成
-2. object pose 生成
-3. object pose 與桌面佔據區域視覺化
-4. keyboard teleoperation 檢查與手動錄製
+The task extends the entry-level tableware manipulation setting into a
+multi-stage dining cleanup benchmark. A single Franka arm must clear tableware
+from a dirty region, place the tableware into a tray, pick up a cloth, wipe the
+dirty table region, and avoid disturbing protected objects.
 
-任務目標是將原本的刀叉擺放任務延伸為「用餐完畢後的餐桌收拾與清潔」任務。機器手臂需要先把 bowl 與 spoon 收到 tray，接著拿起 cloth 並擦拭原本 bowl/spoon 所在的左半桌面區域。
+## Task Summary
 
-## 相關檔案
+Task ID:
 
-| 功能 | 檔案 |
-|------|------|
-| Gym task 註冊 | `packages/simulator/src/simulator/tasks/dining_cleanup/__init__.py` |
-| task/env/scene config | `packages/simulator/src/simulator/tasks/dining_cleanup/dining_cleanup_env_cfg.py` |
-| FSM | `packages/simulator/src/simulator/datagen/state_machine/dining_cleanup.py` |
-| teleoperation | `scripts/teleop.py` |
-| datagen registry | `scripts/datagen/generate.py` |
-| object pose generator | `scripts/generate_dining_cleanup_object_poses.py` |
-| object pose visualization | `scripts/visualize_dining_cleanup_layout.py` |
-| dataset 生成整理 | `docs/dining_cleanup/dataset_generation.md` |
-| evaluation config 整理 | `docs/dining_cleanup/evaluation_configs.md` |
-| 預設 500 筆 pose | `data/dining_clean/dining_cleanup_object_poses_500.json` |
-| 目前視覺化輸出 | `data/dining_clean/dining_cleanup_layout_xy.png` |
+```text
+LeIsaac-HCIS-DiningCleanup-SingleArm-v0
+```
 
-Gym task id：
+Legacy compatibility alias:
 
-```bash
+```text
 HCIS-DiningCleanup-SingleArm-v0
 ```
 
-## Scene 與物件配置設計
-
-### 為什麼沒有直接修改 `scene.usd`
-
-目前 dining room 的 `scene.usd` 是 binary USD crate，不適合直接用文字 patch 修改。專案既有的做法是保留背景 scene，再在 task env config 中用 `RigidObjectCfg` 掛上可互動物件。
-
-因此本任務的做法是：
-
-- `scene.usd` 保持作為 dining room/table 背景。
-- bowl、spoon、tray、tissue、vase、cloth 在 `DiningCleanupSceneCfg` 中定義為 `RigidObjectCfg`。
-- bowl/spoon 初始位置由 object pose JSON 控制。
-- tray、tissue、vase、cloth 在 env cfg 中固定初始位置。
-
-這樣可以避免破壞原本 cutlery task，也比較容易重複生成資料。
-
-### 使用的 USD assets
-
-餐具、托盤與固定障礙物 USD 位於：
+High-level objective:
 
 ```text
-packages/simulator/assets/scenes/dining_room/objects/
+Clean up the dining table by moving the bowl and spoon into the tray, then
+wiping the dirty left-side table region with the cloth while avoiding the
+tissue and vase.
 ```
-Google Drive link: https://drive.google.com/drive/folders/1FHOizW83ahsts2zrd36hD3e29t2Z2hLI?usp=drive_link
-本任務使用：
+
+The task includes three major subgoals:
+
+1. **Tableware clearing**: move `bowl` and `spoon` into the tray.
+2. **Tool use**: pick up the `cloth` and sweep the dirty table region.
+3. **Protected-object safety**: keep `tissue` and `vase` close to their initial positions.
+
+## Important Files
+
+| Purpose | Path |
+|---|---|
+| Gym task registration | `packages/simulator/src/simulator/tasks/dining_cleanup/__init__.py` |
+| Standalone task/env config | `packages/simulator/src/simulator/tasks/dining_cleanup/dining_cleanup_env_cfg.py` |
+| Shared Franka task template | `packages/simulator/src/simulator/tasks/template/single_arm_franka_cfg.py` |
+| Task auto-import registry | `packages/simulator/src/simulator/tasks/__init__.py` |
+| Object pose loader | `packages/simulator/src/simulator/utils/object_poses_loader.py` |
+| FSM datagen policy | `packages/simulator/src/simulator/datagen/state_machine/dining_cleanup.py` |
+| Datagen entry point | `scripts/datagen/generate.py` |
+| Rollout entry point | `scripts/rollout.py` |
+| Host-side rollout wrapper | `rollout_advance_act.sh` |
+| Object pose generator | `scripts/generate_dining_cleanup_object_poses.py` |
+| Layout visualization | `scripts/visualize_dining_cleanup_layout.py` |
+| Evaluation configs | `configs/dining_cleanup/*.json` |
+
+## Standalone Configuration Export
+
+Advanced-level submissions require a standalone environment configuration. The
+Dining Cleanup task satisfies this through:
 
 ```text
-bowl/model_BalandaBowl_69323.usd
-spoon/model_Kitchen_Spoon_B008H2JLP8_LargeWooden_69323.usd
-tray/model_WhiteUtensilTray_69323.usd
-tissue/model_tissue_001_69323.usd
-vase/model_B07JLBDT51_69323.usd
+packages/simulator/src/simulator/tasks/dining_cleanup/
+  __init__.py
+  dining_cleanup_env_cfg.py
 ```
 
-cloth 目前改用 `sim_utils.CuboidCfg` 建立穩定的薄片 rigid object，避免原本 `model_tablecloth.usd` 的 particle-cloth schema 在 simulator 啟動時造成初始位置漂移。
-vase 目前使用 `model_B07JLBDT51_69323.usd` 的原生 mesh；其 local bbox 的 z min 為 `0.000 m`，因此固定位置 `z=0.05` 會讓 vase 底部貼齊桌面。task config 會將 vase scale 到約 `0.100 x 0.100 m` 的桌面 footprint。`dining_cleanup_env_cfg.py` 目前保留 vase USD 內建材質，避免額外 PreviewSurface override 讓整個 vase 被顯示成單一純色。
+The registration file defines the primary Gymnasium task id and a legacy
+compatibility alias:
 
-### 桌面座標系
+```python
+for task_id in (
+    "LeIsaac-HCIS-DiningCleanup-SingleArm-v0",
+    "HCIS-DiningCleanup-SingleArm-v0",
+):
+    gym.register(
+        id=task_id,
+        entry_point="isaaclab.envs:ManagerBasedRLEnv",
+        disable_env_checker=True,
+        kwargs={
+            "env_cfg_entry_point": f"{__name__}.dining_cleanup_env_cfg:DiningCleanupEnvCfg",
+        },
+    )
+```
 
-本任務沿用 dining room task 的世界座標設定。
+The config file subclasses the in-tree single-arm Franka template:
 
-桌面 world XY footprint 約為：
+```text
+DiningCleanupEnvCfg -> SingleArmFrankaTaskEnvCfg
+DiningCleanupSceneCfg -> SingleArmFrankaTaskSceneCfg
+```
+
+This means the task can be reconstructed by importing `simulator.tasks` and
+calling `parse_env_cfg("LeIsaac-HCIS-DiningCleanup-SingleArm-v0", ...)`.
+
+Verification command:
+
+```bash
+PYTHONPATH=./packages/simulator/src python - <<'PY'
+import simulator.tasks
+from isaaclab_tasks.utils import parse_env_cfg
+
+cfg = parse_env_cfg("LeIsaac-HCIS-DiningCleanup-SingleArm-v0", num_envs=1)
+print(type(cfg).__module__, type(cfg).__qualname__)
+print(cfg.task_description)
+PY
+```
+
+Expected module:
+
+```text
+simulator.tasks.dining_cleanup.dining_cleanup_env_cfg DiningCleanupEnvCfg
+```
+
+## Scene Design
+
+The dining room background is loaded from:
+
+```text
+packages/simulator/assets/scenes/dining_room/scene.usd
+```
+
+The interactive objects are spawned by `DiningCleanupSceneCfg` as task-level
+objects. The background scene is not patched directly. This keeps the task
+configuration reproducible and avoids mutating a shared USD scene file.
+
+The environment contains:
+
+| Object | Role |
+|---|---|
+| `bowl` | Movable tableware target |
+| `spoon` | Movable tableware target; can also be replaced by wooden fork through config |
+| `tray` | Placement target for tableware |
+| `cloth` | Tool for wiping the dirty region |
+| `tissue` | Protected object |
+| `vase` | Protected object |
+
+## Coordinate Convention
+
+The dining table world XY footprint is approximately:
 
 ```text
 x = [0.00, 0.70]
 y = [-0.65, 0.00]
 ```
 
-Franka 位於桌子前方。本 advanced task 採用目前需求指定的 convention：
+The task convention is:
 
-- `+x` 方向是 Franka 視角的右手邊，也就是 tray 放置區。
-- `-x` 方向是 Franka 視角的左手邊，也就是 dirty area。
+| Region | Meaning |
+|---|---|
+| left / low x | dirty area and initial bowl/spoon region |
+| right / high x | tray side |
+| middle table | tissue, vase, and cloth positions |
 
-### 固定物件位置
-
-定義於：
+The dirty region used for wiping is:
 
 ```text
-packages/simulator/src/simulator/tasks/dining_cleanup/dining_cleanup_env_cfg.py
+x = [0.00, 0.22]
+y = [-0.50, -0.10]
 ```
 
-目前固定位置：
+The planned wipe lanes are:
 
-| 物件 | world position |
-|------|----------------|
+```text
+x = 0.21, 0.18, 0.15, 0.11, 0.07
+```
+
+## Fixed Object Placement
+
+Fixed object positions are defined in `dining_cleanup_env_cfg.py`.
+
+| Object | World position |
+|---|---|
 | tray | `(0.57, -0.36, 0.05)` |
 | tissue | `(0.35, -0.12, 0.074)` |
 | vase | `(0.35, -0.26, 0.05)` |
 | cloth | `(0.35, -0.43, 0.065)` |
 
-中間區域的 y 順序符合需求：
+The y-order on the middle table is:
 
 ```text
-tissue: y = -0.12
-vase:   y = -0.26
-cloth:  y = -0.43
+tissue -> vase -> cloth
 ```
 
-也就是從 y 大到小依序為 tissue、vase、cloth。
+## Object Footprints
 
-### bowl/spoon 初始區域
+The task uses scaled tabletop footprints for object overlap checks, layout
+visualization, and success-region reasoning.
 
-bowl/spoon 由 `object_poses` 隨 episode 隨機生成。generator 中的 world XY 範圍為：
+| Object | Source geometry | Spawn scale / size | Approx. XY footprint |
+|---|---|---|---|
+| bowl | USD | `(0.50, 0.50, 0.50)` | `0.140 x 0.140 m` |
+| spoon | USD | `(0.60, 0.60, 0.60)` | `0.040 x 0.194 m` |
+| tray | USD | `(0.79, 1.77, 1.00)` | `0.240 x 0.260 m` |
+| tissue | USD | `(1.00, 1.00, 1.00)` | `0.073 x 0.103 m` |
+| vase | USD | `(0.591, 0.591, 0.591)` | `0.100 x 0.100 m` |
+| cloth | CuboidCfg | `(0.055, 0.115, 0.030)` | `0.055 x 0.115 m` |
+
+The cloth is represented as a rigid cuboid for stable manipulation. The original
+cloth USD asset is retained as part of the asset package, but the benchmark uses
+the cuboid geometry defined in the config.
+
+## USD Assets
+
+Dining Cleanup uses assets under:
 
 ```text
-bowl/spoon shared x = [0.10, 0.24]
-bowl/spoon shared y = [-0.50, -0.22]
+packages/simulator/assets/scenes/dining_room/
 ```
 
-這些位置位於桌面左半側 dirty area。generator 會先隨機放 bowl，再在 bowl 周圍採樣 spoon，使兩者不要過度分離，同時保留多樣性。
-
-額外限制：
-
-- bowl/spoon 與 tray/tissue/vase/cloth 依 scaled footprint 半徑避免重疊。
-- bowl 與 spoon 之間的最小中心距離目前為 `0.207 m`，等於 bowl 半徑 `0.070` + spoon 半徑 `0.097` + clearance `0.040`。
-- bowl 與 spoon 的最大中心距離目前為 `0.280 m`，避免兩者初始位置過度分離。
-- 只生成 `status == "full"` 的 episode
-
-### 物件大小與 footprint 設定
-
-更新後的 USD asset 已可用 USD API 讀到 mesh bounding box。bowl、spoon、tray、tissue、vase 會從 USD 載入並套用 task spawn scale；cloth 則改用薄片 cuboid rigid object，避免原始 particle-cloth USD 在 simulator 啟動時漂移。因此 task config 會以實際 spawn 後的 footprint 做：
-
-- object pose 生成時避免重疊
-- visualization 中顯示桌面佔據大小
-- tray success zone 估計
-
-USD bbox / task geometry 與 task scale：
-
-| 物件 | raw USD bbox size / task geometry | task spawn scale / rot | scaled world XY footprint |
-|------|-------------------|------------------------|---------------------------|
-| bowl | `0.280 x 0.280 x 0.130 m` | `(0.50, 0.50, 0.50)` | `0.140 x 0.140 m` |
-| spoon | `0.066 x 0.323 x 0.032 m` | `(0.60, 0.60, 0.60)` | `0.040 x 0.194 m` |
-| tray | `0.304 x 0.147 x 0.054 m` | `(0.79, 1.77, 1.00)` | `0.240 x 0.260 m` |
-| tissue | `0.073 x 0.103 x 0.050 m` | `(1.00, 1.00, 1.00)` | `0.073 x 0.103 m` |
-| vase | `0.169 x 0.169 x 0.240 m` | `(0.591, 0.591, 0.591)` | `0.100 x 0.100 m` |
-| cloth | `CuboidCfg(size=(0.055, 0.115, 0.030))` | no USD scale / no z yaw | `0.055 x 0.115 m` |
-
-Franka gripper 初始最大開口約為 `0.04 + 0.04 = 0.08 m`。目前 cloth cuboid 的窄邊為 `0.055 m`，可由夾爪夾取窄邊；z 厚度為 `0.030 m`，讓 PhysX 在啟動時有穩定的薄片碰撞幾何，並提高夾取時的接觸厚度。
-
-## Object Pose 生成
-
-### 腳本
+For a self-contained Advanced-level submission, include these directories:
 
 ```text
-scripts/generate_dining_cleanup_object_poses.py
+packages/simulator/assets/scenes/dining_room/scene.usd
+packages/simulator/assets/scenes/dining_room/objects/bowl/
+packages/simulator/assets/scenes/dining_room/objects/spoon/
+packages/simulator/assets/scenes/dining_room/objects/tray/
+packages/simulator/assets/scenes/dining_room/objects/tissue/
+packages/simulator/assets/scenes/dining_room/objects/vase/
+packages/simulator/assets/scenes/dining_room/objects/cloth/
+packages/simulator/assets/scenes/dining_room/objects/bowl_2/
+packages/simulator/assets/scenes/dining_room/objects/wooden_fork/
 ```
 
-### 輸出檔案
+The `bowl_2` and `wooden_fork` directories are required for the
+`fork_bowl2_scaled` evaluation config.
 
-預設輸出：
+USD files often reference nested `origin/` and `resource/` files. Include whole
+asset directories rather than only the top-level `.usd` file.
+
+## Evaluation Configs
+
+Three configs are provided under `configs/dining_cleanup/`.
+
+### 1. Fixed Spoon Yaw
+
+```text
+configs/dining_cleanup/spoon_fixed_yaw.json
+```
+
+This config uses the original bowl and spoon assets. The spoon yaw is fixed.
+
+Object pose split:
 
 ```text
 data/dining_clean/dining_cleanup_object_poses_500.json
 ```
 
-### 生成指令
+### 2. Random Spoon Yaw
 
-在 repo root 執行：
-
-```bash
-python3 scripts/generate_dining_cleanup_object_poses.py \
-  --count 500 \
-  --output data/dining_clean/dining_cleanup_object_poses_500.json
+```text
+configs/dining_cleanup/spoon_random_yaw.json
 ```
 
-可指定 random seed：
+This config uses the original bowl and spoon assets, but the spoon yaw is
+randomized across episodes.
+
+Object pose split:
+
+```text
+data/dining_clean/dining_cleanup_spoon_random_yaw_200.json
+```
+
+### 3. Fork + Bowl2 Scaled
+
+```text
+configs/dining_cleanup/fork_bowl2_scaled.json
+```
+
+This config keeps the scene object keys as `bowl` and `spoon` so the FSM,
+success checks, and object pose loader do not need to change. Internally:
+
+| Scene key | Actual asset |
+|---|---|
+| `bowl` | `objects/bowl_2/model_B075HWDSDK_69323.usd` |
+| `spoon` | `objects/wooden_fork/model_WoodenFork_69323.usd` |
+
+Object pose split:
+
+```text
+data/dining_clean/dining_cleanup_fork_bowl2_scaled_200.json
+```
+
+## Object Pose Format
+
+The task uses the existing UMI-style per-episode object pose schema:
+
+```json
+[
+  {
+    "video_name": "synthetic_dining_cleanup_poses.mp4",
+    "episode_range": [0, 1732],
+    "objects": [
+      {
+        "object_name": "bowl",
+        "rvec": [0.0, 0.0, 2.909],
+        "tvec": [-0.225, -0.561, 0.057]
+      },
+      {
+        "object_name": "spoon",
+        "rvec": [0.0, 0.0, 2.356],
+        "tvec": [-0.280, -0.350, 0.066]
+      }
+    ],
+    "status": "full"
+  }
+]
+```
+
+Only entries with `status == "full"` are used by datagen and rollout.
+
+The raw `tvec` values are anchor-frame positions. The loader converts them to
+world coordinates using:
+
+```text
+ANCHOR_WORLD_POSE = (0.40, 0.10, 0.0)
+world_xy = raw_tvec_xy + (0.40, 0.10)
+```
+
+The object pose file controls only the initial `bowl` and `spoon` poses. Tray,
+tissue, vase, and cloth are fixed by the environment config.
+
+## Generating Object Pose Splits
+
+Generate the default fixed-yaw split:
 
 ```bash
 python3 scripts/generate_dining_cleanup_object_poses.py \
@@ -184,728 +330,287 @@ python3 scripts/generate_dining_cleanup_object_poses.py \
   --output data/dining_clean/dining_cleanup_object_poses_500.json
 ```
 
-### object_poses schema
-
-產生的 JSON 採用專案既有 UMI-style per-episode schema：
-
-```json
-[
-    {
-        "video_name": "synthetic_dining_cleanup_poses.mp4",
-        "episode_range": [0, 1732],
-        "objects": [
-            {
-                "object_name": "bowl",
-                "rvec": [0.0, 0.0, 2.909],
-                "tvec": [-0.225, -0.561, 0.057]
-            },
-            {
-                "object_name": "spoon",
-                "rvec": [0.0, 0.0, 2.356],
-                "tvec": [-0.280, -0.350, 0.066]
-            }
-        ],
-        "status": "full"
-    }
-]
-```
-
-注意：
-
-- `tvec` 是 raw anchor-frame pose。
-- simulator loader 會用 `ANCHOR_WORLD_POSE = (0.40, 0.10, 0.0)` 轉成 world XY。
-- 因此 `world_xy = raw_tvec_xy + (0.40, 0.10)`。
-- spoon 的 raw yaw 固定為 `3*pi/4`，加上 env config 的 spoon yaw offset `3*pi/2` 後，最終 world yaw 固定為 `pi/4`，也就是與 `+x` 軸夾 `45 deg`。
-- 本 task 的 object pose 只控制 `bowl` 與 `spoon`。
-- `tray`、`tissue`、`vase`、`cloth` 是固定 scene object，不在 object pose JSON 中隨 episode 變動。
-
-### 目前 500 筆統計
-
-目前已產生的 `data/dining_clean/dining_cleanup_object_poses_500.json` 統計如下：
-
-```text
-episodes = 500
-bowl world x = [0.100, 0.197]
-bowl world y = [-0.500, -0.220]
-spoon world x = [0.100, 0.168]
-spoon world y = [-0.500, -0.220]
-bowl-spoon world XY distance = [0.207, 0.279]
-scaled footprint clearance min = 0.207
-configured bowl-spoon max distance = 0.280
-```
-
-### 驗證 object pose loader
-
-可用以下方式確認 object pose 能被 loader 讀取：
-
-```bash
-PYTHONPATH=./packages/simulator/src \
-python3 - <<'PY'
-from pathlib import Path
-from simulator.utils.object_poses_loader import ObjectPoseConfig, load_episode_poses
-
-cfg = ObjectPoseConfig(
-    tag_to_object={1: "bowl", 2: "spoon"},
-    anchor_tag_id=0,
-    anchor_world_pose=(0.40, 0.10, 0.0),
-    object_z=0.05,
-    object_roll=0.0,
-    object_pitch=0.0,
-    per_object_yaw_offset={"bowl": 0.0, "spoon": 4.71238898038469},
-    use_fixed_yaw=False,
-)
-
-episodes = load_episode_poses(Path("data/dining_clean/dining_cleanup_object_poses_500.json"), cfg)
-print(len(episodes))
-print(sorted(episodes[0]))
-PY
-```
-
-預期輸出：
-
-```text
-500
-['bowl', 'spoon']
-```
-
-## Object Pose 視覺化
-
-### 腳本
-
-```text
-scripts/visualize_dining_cleanup_layout.py
-```
-
-### 輸出檔案
-
-預設輸出：
-
-```text
-data/dining_clean/dining_cleanup_layout_xy.png
-```
-
-### 產生圖檔
+Visualize a split:
 
 ```bash
 python3 scripts/visualize_dining_cleanup_layout.py \
-  --input data/dining_clean/dining_cleanup_object_poses_500.json \
-  --output data/dining_clean/dining_cleanup_layout_xy.png
+  --input data/dining_clean/dining_cleanup_spoon_random_yaw_200.json \
+  --output data/dining_clean/dining_cleanup_spoon_random_yaw_200_layout_xy.png
 ```
 
-### 圖中包含的資訊
-
-視覺化圖使用 world XY 俯視座標，包含：
+The layout visualization shows:
 
 - table footprint
-- 左右半桌分界線
-- bowl 的 500 筆初始位置
-- spoon 的 500 筆初始位置
-- bowl/spoon 初始位置 bounding box
-- bowl/spoon scaled footprint envelope
-- tray 中心
-- tray success zone
-- bowl drop target
-- spoon drop target
-- tissue/vase/cloth 固定位置
-- tray/tissue/vase/cloth scaled footprint
-- tray/tissue/vase/cloth keep-out radius
-- cloth wipe coverage region
-- cloth wipe lane path
+- dirty region
+- expected cloth path
+- fixed object footprints
+- bowl/spoon occupied envelopes
+- per-episode bowl/spoon start points
 
-圖中的虛線圓圈是 generator 的 keep-out radius，加上 `0.040 m` clearance 後用來做避碰檢查；它不是物件的實際外形。實際桌面佔據大小以半透明矩形表示。
+## Datagen
 
-### 目前視覺化統計
-
-執行 visualization 後會印出：
-
-```text
-bowl: n=500, x=[0.100, 0.197], y=[-0.500, -0.220]
-spoon: n=500, x=[0.100, 0.168], y=[-0.500, -0.220]
-table: x=[0.000, 0.700], y=[-0.650, 0.000]
-wipe region: x=[0.080, 0.220], y=[-0.550, -0.100]
-planned cloth/table coverage: 98.2%
-coverage success threshold: 68.7%
-tray success zone: x=[0.440, 0.700], y=[-0.500, -0.220]
-tray scaled footprint: 0.240 x 0.260 m
-tissue scaled footprint: 0.073 x 0.103 m
-vase scaled footprint: 0.100 x 0.100 m
-cloth scaled footprint: 0.055 x 0.115 m
-bowl scaled footprint: 0.140 x 0.140 m
-spoon scaled footprint: 0.040 x 0.194 m
-```
-
-## FSM 設計
-
-### 腳本
+FSM datagen is implemented in:
 
 ```text
 packages/simulator/src/simulator/datagen/state_machine/dining_cleanup.py
 ```
 
-FSM class：
-
-```python
-DiningCleanupStateMachine
-```
-
-### 任務流程
-
-FSM 依序執行三個大段落：
-
-1. 將 bowl 放入 tray
-2. 將 spoon 放入 tray
-3. 拿起 cloth 並擦拭左半桌面
-
-完整高階流程：
-
-```text
-bowl:
-  move above bowl
-  approach bowl edge
-  close gripper
-  lift bowl
-  move above bowl drop target
-  lower
-  release
-
-spoon:
-  move above spoon
-  approach spoon
-  close gripper
-  lift spoon
-  move above spoon drop target
-  lower
-  release
-
-cloth:
-  move above cloth
-  approach cloth
-  close gripper
-  lift cloth
-  move above wipe start
-  lower to wipe contact height
-  sweep left table along y-axis lanes
-  lift at final endpoint
-```
-
-### Bowl 夾取設計
-
-需求中指定 bowl 要夾取邊緣，因此 FSM 不直接抓 bowl center。做法是使用 signed retreat offset 將 grasp target 從 bowl center 移到 bowl 邊緣：
-
-```text
-_GRASP_RETREAT_PER_OBJECT["bowl"] = -0.075
-```
-
-目前負值會讓 gripper 目標點偏向 bowl 遠離 robot 的邊緣，而不是 bowl 幾何中心。FSM 的 `move_above_object`、`approach_object`、`grasp_object` 都使用同一個 grasp anchor XY，因此 bowl 夾取時會先移動到 grasp anchor 正上方，再沿 z 方向垂直下降。
-
-### Spoon 夾取設計
-
-spoon 採用較小 retreat：
-
-```text
-_GRASP_RETREAT_PER_OBJECT["spoon"] = 0.020
-```
-
-spoon 的 object pose yaw 會在 env config 中加上 `3*pi/2`，也就是原本 USD heading correction 再額外旋轉 180 度。FSM 的 grasp yaw 會根據這個 spoon object yaw，再加上 `_GRASP_YAW_OFFSET = pi/2` 與小範圍 random yaw offset。
-
-### Cloth 夾取與擦拭設計
-
-cloth 夾取目標使用 cloth root / 幾何中心：
-
-```text
-_GRASP_RETREAT_PER_OBJECT["cloth"] = 0.000
-_grasp_anchor_w("cloth") = cloth center
-```
-
-因此手臂在 approach 與 close gripper 時會對準抹布中心，而不是邊緣。
-
-cloth 固定起始位置：
-
-```text
-cloth = (0.35, -0.43, 0.065)
-```
-
-擦拭區域：
-
-```text
-x = [0.08, 0.22]
-y = [-0.55, -0.10]
-```
-
-擦拭採用 3 條 y-axis lanes，並以 cloth 的 scaled footprint `0.055 x 0.115 m` 規劃安全距離：
-
-```text
-x lanes = [0.10, 0.15, 0.19]
-```
-
-每條 lane 沿 y 方向掃過 dirty area。相鄰 lane 採用往返方式移動，避免每一條都需要回到同一端點：
-
-```text
-lane 0: y low  -> y high
-lane 1: y high -> y low
-lane 2: y low  -> y high
-```
-
-最右 lane 的 cloth 右緣約為 `0.218 m`，低於 vase/tissue 左側安全界線，因此擦拭時不會掃到 tissue 或 vase。以 cloth swept footprint 計算，目標擦拭區 `x=[0.08, 0.22]`, `y=[-0.55, -0.10]` 的理想 planned coverage 為 `98.2%`。FSM 與 env success 目前都累積實際 cloth/table coverage，並使用理想覆蓋率的 `70%` 作為成功門檻，也就是 dirty region coverage ratio 至少約 `68.7%`。
-
-### FSM phase 與 duration
-
-bowl 與 spoon 各 7 個 phase：
-
-| Phase | 說明 | steps |
-|-------|------|-------|
-| move_above_object | 移動到物件上方 | 180 |
-| approach_object | 下降到抓取高度 | 160 |
-| grasp_object | 關閉 gripper | 25 |
-| lift_object | 抬起物件 | 130 |
-| move_above_drop | 移到 tray drop target 上方 | 170 |
-| lower_to_release | 下降到釋放高度 | 80 |
-| retreat_from_drop | 開爪並上移 | 40 |
-
-單一物件共：
-
-```text
-785 steps
-```
-
-bowl + spoon 共：
-
-```text
-1570 steps
-```
-
-cloth pick 與 wipe 前置 phase：
-
-| Phase | 說明 | steps |
-|-------|------|-------|
-| move_above_object | 移動到 cloth 上方 | 160 |
-| approach_object | 下降到 cloth | 130 |
-| grasp_object | 關閉 gripper | 30 |
-| lift_object | 抬起 cloth | 110 |
-| move_above_wipe_start | 移動到擦拭起點上方 | 140 |
-| lower_to_wipe | 下降到擦拭高度 | 80 |
-
-擦拭 phase：
-
-| Phase | 數量 | 每段 steps | 合計 |
-|-------|------|------------|------|
-| wipe_sweep | 3 | 150 | 450 |
-| wipe_shift | 2 | 60 | 120 |
-| wipe_lift_finish | 1 | 80 | 80 |
-
-整個 FSM 預估長度：
-
-```text
-1570 + 650 + 650 = 2870 steps
-MAX_STEPS = 2970
-```
-
-### Gripper command
-
-FSM 的 action vector 是：
-
-```text
-[panda_joint1, ..., panda_joint7, gripper]
-```
-
-gripper command：
-
-```text
-open  =  1.0
-close = -1.0
-```
-
-### IK 控制
-
-FSM 以 world-space end-effector target pose 規劃，再轉成 Franka 7 軸 joint target。
-
-控制流程：
-
-1. 計算 target EE pose。
-2. 將 target pose 轉到 robot root frame。
-3. 限制每步最大位置變化：
-
-```text
-_MAX_CARTESIAN_DELTA = 0.018
-```
-
-4. 限制每步最大旋轉變化：
-
-```text
-_MAX_ROT_DELTA = 0.08
-```
-
-5. 使用 damped least-squares Jacobian IK：
-
-```text
-_IK_DLS_LAMBDA = 0.01
-```
-
-6. 輸出 joint target + gripper command。
-
-### FSM success check
-
-`DiningCleanupStateMachine.check_success(env)` 會檢查：
-
-1. FSM 已完成完整 wipe timeline。
-2. bowl 的 XY 位置在 tray success zone 內。
-3. spoon 的 XY 位置在 tray success zone 內。
-4. actual cloth/table coverage ratio 至少達到理想覆蓋率的 `70%`。
-5. tray 的 XY 位移不超過 `0.05 m`，避免以推動 tray 的方式通過 placement check。
-6. tissue/vase 的 XY 位移不超過 `0.035 m`，避免擦拭過程撞偏固定物件。
-7. tray、cloth、tissue、vase 的 root z 不低於 `0.0 m`。
-
-目前 bowl/spoon 的 tray placement 不再檢查 z range，也不再要求 bowl 在 tray `+y` 側、spoon 在 tray `-y` 側；只要兩者的 XY 位置都落在 tray success zone 即可。
-
-tray success zone：
-
-```text
-x half width = 0.13
-y half width = 0.14
-z range = not checked for bowl/spoon placement
-```
-
-## Teleoperation 執行方式
-
-teleoperation 適合用來檢查 dining cleanup 場景、手動測試 grasp/wipe 動作，或錄製少量人工示範。執行環境需使用 Isaac Lab 可用的 GPU/Docker 環境。
-
-### 1. 基本啟動
-
-只要切換 task id 即可使用 dining cleanup 任務：
+Run datagen with a Dining Cleanup config:
 
 ```bash
-python scripts/teleop.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
-  --teleop_device keyboard \
-  --num_envs 1 \
-  --device cuda \
-  --enable_cameras
-```
-
-這個指令會載入 `HCIS-DiningCleanup-SingleArm-v0`，也就是 `packages/simulator/src/simulator/tasks/dining_cleanup/dining_cleanup_env_cfg.py` 定義的場景。若沒有提供 `--object_poses`，bowl/spoon 會使用 env config 內的預設初始位置；tray、tissue、vase、cloth 則固定在 env config 中定義的位置。
-
-`--enable_cameras` 會啟用 `wrist` 與 `front` camera observation。若只是快速檢查 robot motion，可以省略；若要錄製可訓練的 LeRobot dataset，建議保留。
-
-### 2. 使用 dining cleanup object poses
-
-若要使用目前預設的 500 筆 bowl/spoon 初始位置，加入 `--object_poses`：
-
-```bash
-python scripts/teleop.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
-  --teleop_device keyboard \
+python scripts/datagen/generate.py \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
+  --dining_cleanup_config configs/dining_cleanup/spoon_fixed_yaw.json \
   --num_envs 1 \
   --device cuda \
   --enable_cameras \
-  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json
-```
-
-`object_poses` 只會更新 bowl/spoon；tray、tissue、vase、cloth 維持固定場景配置。`scripts/teleop.py` 會載入 JSON 中 `status == "full"` 的 entries，第一次 reset 後套用第 1 筆 episode pose，之後每次按 `R` 或 `N` reset 時會前進到下一筆 episode pose。
-
-### 3. Keyboard 控制
-
-end-effector delta 以 `panda_hand` frame 表示，teleop script 會使用 Franka keyboard controller 將操作轉成 joint target 與 gripper command。
-
-| Key | 功能 |
-|-----|------|
-| `W` / `S` | +x / -x 平移 |
-| `A` / `D` | +y / -y 平移 |
-| `J` / `K` | +z / -z 平移 |
-| `H` / `L` | roll- / roll+ |
-| `U` / `I` | pitch- / pitch+ |
-| `Q` / `E` | yaw- / yaw+ |
-| `C` | 打開 gripper |
-| `M` | 關閉 gripper |
-| `R` | reset environment；若有 `--object_poses`，切到下一筆 episode pose |
-| `N` | 標記目前 episode 成功並 reset；錄製時會存成 successful demo |
-
-可用 `--sensitivity` 調整平移與旋轉步長。例如 bowl edge grasp 或 cloth wipe 需要更細緻操作時，可降低 sensitivity：
-
-```bash
-python scripts/teleop.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
-  --teleop_device keyboard \
-  --num_envs 1 \
-  --device cuda \
-  --enable_cameras \
-  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
-  --sensitivity 0.5
-```
-
-### 4. 錄製 HDF5 demonstrations
-
-若要錄製 HDF5 demonstrations，加入 `--record` 與 `--dataset_file`：
-
-```bash
-python scripts/teleop.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
-  --teleop_device keyboard \
-  --num_envs 1 \
-  --device cuda \
-  --enable_cameras \
-  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
   --record \
-  --dataset_file ./datasets/dining_cleanup_teleop.hdf5 \
-  --num_demos 10
+  --dataset_file ./datasets/dining_cleanup_fixed_spoon.hdf5
 ```
 
-錄製流程：
-
-1. 啟動後開始操作 robot；第一次送出 action 時會開始 recording。
-2. 完成任務後按 `N`，將 episode 標記為 success 並 reset。
-3. 若 episode 失敗或想重來，按 `R` reset；這次 episode 不會被標成 success。
-4. 若有設定 `--object_poses`，每次 `R` 或 `N` reset 後會套用下一筆 pose。
-5. `--num_demos 10` 代表錄到 10 筆 successful demos 後自動結束；若設為 `0`，可用 Ctrl+C 手動停止並 finalize dataset。
-
-若輸出檔案已存在，請改新的 `--dataset_file`，或加入 `--resume` 續錄到既有檔案。
-
-### 5. 錄製 LeRobot dataset
-
-若要直接輸出 LeRobot dataset，加入 `--use_lerobot_recorder`、`--lerobot_dataset_repo_id` 與 FPS：
+Generate a LeRobot-format dataset:
 
 ```bash
-python scripts/teleop.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
-  --teleop_device keyboard \
+HF_USER=AI-Final
+
+python scripts/datagen/generate.py \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
+  --dining_cleanup_config configs/dining_cleanup/spoon_fixed_yaw.json \
   --num_envs 1 \
   --device cuda \
   --enable_cameras \
-  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
   --record \
   --use_lerobot_recorder \
-  --lerobot_dataset_repo_id ${HF_USER}/dining-cleanup-teleop \
+  --lerobot_dataset_repo_id ${HF_USER}/dining-cleanup-fixed-spoon \
   --lerobot_dataset_fps 30 \
-  --dataset_file ./datasets/dining_cleanup_teleop.hdf5 \
-  --num_demos 10
+  --dataset_file ./datasets/dining_cleanup_fixed_spoon.hdf5
 ```
 
-`--lerobot_dataset_repo_id` 會決定本地 LeRobot dataset 目錄名稱與後續上傳 Hugging Face Hub 時的 repo id。錄製完成後若要上傳，可再使用：
+The number of datagen episodes is determined by the selected config's
+`object_poses` file.
 
-```bash
-hf upload ${HF_USER}/dining-cleanup-teleop --repo-type dataset
-```
+## Rollout
 
-### 6. Success 判定注意事項
-
-`scripts/teleop.py` 在手動 teleoperation 模式會關閉 env 原本的 automatic `success` termination，避免操作過程中自動 reset。因此 teleop 錄製時的成功與否不是由 `dining_cleanup_success(...)` 自動判定，而是由操作者按鍵決定：
+The direct rollout entry point is:
 
 ```text
-N = successful episode
-R = reset/discard current episode
+scripts/rollout.py
 ```
 
-這和 `scripts/datagen/generate.py` 不同；datagen 會在 FSM episode 結束後呼叫 `DiningCleanupStateMachine.check_success(env)`，再決定是否輸出 successful demo。
-
-## Datagen 執行方式
-
-### 1. 產生 object poses
-
-```bash
-cd /home/weichen/AI_capstone/aicapstone_final_project
-
-python3 scripts/generate_dining_cleanup_object_poses.py \
-  --count 500 \
-  --output data/dining_clean/dining_cleanup_object_poses_500.json
-```
-
-### 2. 視覺化確認物件範圍
-
-```bash
-python3 scripts/visualize_dining_cleanup_layout.py \
-  --input data/dining_clean/dining_cleanup_object_poses_500.json \
-  --output data/dining_clean/dining_cleanup_layout_xy.png
-```
-
-確認圖檔：
-
-```text
-data/dining_clean/dining_cleanup_layout_xy.png
-```
-
-### 3. 執行 datagen
-
-需在 Isaac Lab 可用的 GPU 環境中執行。
-
-基本 HDF5 輸出：
-
-```bash
-python scripts/datagen/generate.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
-  --num_envs 1 \
-  --device cuda \
-  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
-  --record \
-  --dataset_file ./datasets/dining_cleanup.hdf5
-```
-
-若需要 camera observation，加入：
-
-```bash
---enable_cameras
-```
-
-完整範例：
-
-```bash
-python scripts/datagen/generate.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
-  --num_envs 1 \
-  --device cuda \
-  --enable_cameras \
-  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
-  --record \
-  --dataset_file ./datasets/dining_cleanup.hdf5
-```
-
-### 4. LeRobot recorder 輸出
-
-若要直接輸出 LeRobot dataset：
-
-```bash
-python scripts/datagen/generate.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
-  --num_envs 1 \
-  --device cuda \
-  --enable_cameras \
-  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
-  --record \
-  --use_lerobot_recorder \
-  --lerobot_dataset_repo_id ${HF_USER}/dining-cleanup \
-  --lerobot_dataset_fps 30 \
-  --dataset_file ./datasets/dining_cleanup.hdf5
-```
-
-## 固定 Evaluation Protocol
-
-Advanced level evaluation 應使用固定 seed、固定 episode length、固定 object pose split，並在每個 rollout episode reset 後套用 `object_poses` 中的下一筆 bowl/spoon 初始位置。`scripts/rollout.py` 目前支援 `--object_poses`，因此 dining cleanup policy evaluation 可以直接使用同一份 500 筆 pose 檔。
-
-建議本地 evaluation 指令：
+Direct Python command:
 
 ```bash
 python scripts/rollout.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --headless \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
+  --dining_cleanup_config configs/dining_cleanup/spoon_fixed_yaw.json \
   --policy_type=lerobot-<policy_name> \
-  --policy_checkpoint_path=<path/to/checkpoint> \
-  --policy_action_horizon=1 \
+  --policy_checkpoint_path <local_pretrained_model_dir> \
+  --policy_action_horizon <horizon> \
   --device=cuda \
   --enable_cameras \
-  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
-  --eval_rounds=50 \
-  --episode_length_s=60 \
-  --seed=2026053002
+  --show_wipe_mesh \
+  --eval_rounds=30 \
+  --episode_length_s=80 \
+  --seed=2026061011 \
+  --record_video \
+  --video_dir outputs/rollout_videos \
+  --video_fps=30 \
+  --progress_interval_s=10
 ```
 
-目前 rollout success 由 env termination 判斷，包含：
+Important arguments:
 
-- bowl/spoon 的 XY 位置位於 tray success zone。
-- bowl/spoon placement 不檢查 z range，也不要求 bowl/spoon 在 tray 內分別位於固定 y 側。
-- actual cloth/table coverage 達到理想覆蓋率的 `70%`，目前約等於 dirty region coverage ratio `68.7%`。
-- tissue/vase XY 位移不超過 `0.035 m`。
+| Argument | Meaning |
+|---|---|
+| `--dining_cleanup_config` | Selects asset overrides and object pose split |
+| `--policy_type` | LeRobot policy type, e.g. `lerobot-act` or `lerobot-smolvla` |
+| `--policy_checkpoint_path` | Local checkpoint directory containing `config.json` |
+| `--policy_action_horizon` | Number of action steps consumed per policy call |
+| `--eval_rounds` | Number of evaluation episodes |
+| `--episode_length_s` | Episode timeout |
+| `--record_video` | Saves rollout videos |
 
-每個 rollout episode 結束時，terminal 會額外印出 dining cleanup stage status，包含 tableware、wiping、protected 的 success/fail，以及 cloth coverage ratio、threshold、ideal coverage。
+## GlowsAI / Docker Rollout Wrapper
 
-## 快速檢查指令
-
-### Python syntax check
-
-```bash
-python3 -m py_compile \
-  packages/simulator/src/simulator/tasks/dining_cleanup/dining_cleanup_env_cfg.py \
-  packages/simulator/src/simulator/tasks/dining_cleanup/__init__.py \
-  packages/simulator/src/simulator/datagen/state_machine/dining_cleanup.py \
-  scripts/generate_dining_cleanup_object_poses.py \
-  scripts/visualize_dining_cleanup_layout.py \
-  scripts/teleop.py \
-  scripts/datagen/generate.py \
-  scripts/rollout.py
-```
-
-### object pose 基本檢查
-
-```bash
-python3 - <<'PY'
-import json
-from pathlib import Path
-
-p = Path("data/dining_clean/dining_cleanup_object_poses_500.json")
-d = json.loads(p.read_text())
-
-print("count", len(d))
-print("full", sum(1 for e in d if e.get("status") == "full"))
-print("contiguous", all(d[i]["episode_range"][1] == d[i + 1]["episode_range"][0] for i in range(len(d) - 1)))
-print("object_sets", sorted({tuple(sorted(o["object_name"] for o in e["objects"])) for e in d}))
-PY
-```
-
-預期：
+The host-side wrapper is:
 
 ```text
-count 500
-full 500
-contiguous True
-object_sets [('bowl', 'spoon')]
+rollout_advance_act.sh
 ```
 
-## 目前設計限制與後續可改進處
+Run it from the GlowsAI host shell, not from inside the container prompt. The
+script starts its own Docker container.
 
-1. `scene.usd` 目前沒有直接修改，而是透過 env cfg 加入物件。若之後需要 permanently baked scene，可以再用 USD tooling 另存一個 dining cleanup 專用 USD。
-2. env termination 會用 coarse XY grid 累積 cloth/table coverage；這是剛體 cloth footprint 的幾何覆蓋估計，不是 deformable cloth 真實接觸面積。
-3. cloth 是以 rigid object 方式處理，不是 deformable cloth simulation。
-4. tray/tissue/vase/cloth 目前固定位置。若之後要隨機化中間物件順序或 tray 位置，需要擴充 object pose loader 或新增 task-specific pose schema。
-5. bowl edge grasp 的偏移量 `_GRASP_RETREAT_PER_OBJECT["bowl"] = -0.075` 可能需要依 bowl USD mesh 實際大小微調；目前 FSM 會先移動到同一個 grasp anchor 正上方，再垂直下降夾取。
-
-## 建議工作流程
-
-每次改動 dining cleanup task 後，建議依序執行：
+ACT rollout from Hugging Face:
 
 ```bash
-# 1. 語法檢查
-python3 -m py_compile \
-  packages/simulator/src/simulator/tasks/dining_cleanup/dining_cleanup_env_cfg.py \
-  packages/simulator/src/simulator/datagen/state_machine/dining_cleanup.py \
-  scripts/generate_dining_cleanup_object_poses.py \
-  scripts/visualize_dining_cleanup_layout.py \
-  scripts/teleop.py
-
-# 2. 重新產生 poses
-python3 scripts/generate_dining_cleanup_object_poses.py \
-  --count 500 \
-  --output data/dining_clean/dining_cleanup_object_poses_500.json
-
-# 3. 視覺化檢查
-python3 scripts/visualize_dining_cleanup_layout.py \
-  --input data/dining_clean/dining_cleanup_object_poses_500.json \
-  --output data/dining_clean/dining_cleanup_layout_xy.png
-
-# 4. 可選：在 Isaac Lab GPU 環境跑 keyboard teleoperation 檢查場景
-python scripts/teleop.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
-  --teleop_device keyboard \
-  --num_envs 1 \
-  --device cuda \
-  --enable_cameras \
-  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json
-
-# 5. 在 Isaac Lab GPU 環境跑 datagen
-python scripts/datagen/generate.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
-  --num_envs 1 \
-  --device cuda \
-  --enable_cameras \
-  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
-  --record \
-  --dataset_file ./datasets/dining_cleanup.hdf5
-
-# 6. 在 Isaac Lab GPU 環境跑 policy rollout evaluation
-python scripts/rollout.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
-  --policy_type=lerobot-<policy_name> \
-  --policy_checkpoint_path=<path/to/checkpoint> \
-  --policy_action_horizon=1 \
-  --device=cuda \
-  --enable_cameras \
-  --object_poses data/dining_clean/dining_cleanup_object_poses_500.json \
-  --eval_rounds=50 \
-  --episode_length_s=60 \
-  --seed=2026053002
+HF_REPO_ID=AI-Final/advanced-act-v3 \
+MODEL_NAME=advanced-act-v3 \
+CHECKPOINT=hf \
+POLICY_TYPE=lerobot-act \
+POLICY_ACTION_HORIZON=25 \
+./rollout_advance_act.sh configs/dining_cleanup/spoon_fixed_yaw.json
 ```
+
+SmolVLA rollout from Hugging Face:
+
+```bash
+HF_REPO_ID=AI-Final/smolvla-advanced-v3 \
+MODEL_NAME=smolvla-advanced-v3 \
+CHECKPOINT=040000 \
+POLICY_TYPE=lerobot-smolvla \
+POLICY_ACTION_HORIZON=16 \
+HF_MODEL_SUBDIR=training_runs/smolvla_advanced_v3_20260611_185615/checkpoints/040000 \
+MODEL_DIR_REL=experiments/advance/smolvla-advanced-v3/training_runs/smolvla_advanced_v3_20260611_185615/checkpoints/040000/pretrained_model \
+./rollout_advance_act.sh configs/dining_cleanup/spoon_fixed_yaw.json
+```
+
+If the Hugging Face repository is private:
+
+```bash
+export HF_TOKEN=<your_token>
+```
+
+Rollout outputs are written under:
+
+```text
+experiments/advance/<model_name>/
+```
+
+Example:
+
+```text
+rollout_040000_spoon_fixed_yaw_<timestamp>.log
+rollout_040000_spoon_fixed_yaw_<timestamp>_videos/
+```
+
+## Success Criteria
+
+An episode succeeds when all major checks pass:
+
+1. Bowl and spoon are inside the tray success region.
+2. Wiping coverage reaches the threshold.
+3. Tissue and vase remain within the protected-object displacement tolerance.
+
+The relevant constants are defined in `dining_cleanup_env_cfg.py`:
+
+| Constant | Meaning |
+|---|---|
+| `TRAY_SUCCESS_X_HALF_WIDTH` | Tray success region x half-width |
+| `TRAY_SUCCESS_Y_HALF_WIDTH` | Tray success region y half-width |
+| `WIPE_COVERAGE_THRESHOLD` | Required wipe coverage threshold |
+| `WIPE_COVERAGE_RESOLUTION` | Wipe coverage grid resolution |
+| `STATIC_OBJECT_XY_TOL` | Protected-object displacement tolerance |
+
+The rollout script prints per-episode status and final success rate. Each
+episode report includes tableware, wiping, and protected-object checks.
+
+## Reproducibility Settings
+
+Use fixed settings when reporting benchmark results:
+
+```text
+task: LeIsaac-HCIS-DiningCleanup-SingleArm-v0
+seed: 2026061011
+eval_rounds: 30
+episode_length_s: 80
+video_fps: 30
+device: cuda
+```
+
+Recommended policy horizons:
+
+| Policy | `--policy_type` | `--policy_action_horizon` |
+|---|---|---|
+| ACT | `lerobot-act` | `25` |
+| SmolVLA | `lerobot-smolvla` | `16` |
+
+## Submission Packaging Checklist
+
+For Advanced-level submission, package at least:
+
+```text
+submission/
+  README.txt
+  Configurations/
+    simulator/tasks/dining_cleanup/
+      __init__.py
+      dining_cleanup_env_cfg.py
+    configs/dining_cleanup/
+      spoon_fixed_yaw.json
+      spoon_random_yaw.json
+      fork_bowl2_scaled.json
+    data/dining_clean/
+      dining_cleanup_object_poses_500.json
+      dining_cleanup_spoon_random_yaw_200.json
+      dining_cleanup_fork_bowl2_scaled_200.json
+  Custom_CAD_Models/
+    packages/simulator/assets/scenes/dining_room/
+      scene.usd
+      objects/bowl/
+      objects/spoon/
+      objects/tray/
+      objects/tissue/
+      objects/vase/
+      objects/cloth/
+      objects/bowl_2/
+      objects/wooden_fork/
+  Supplementary/
+    rollout_logs/
+    selected_rollout_videos/
+    layout_figures/
+    packages/simulator/src/simulator/datagen/state_machine/
+      dining_cleanup.py
+    scripts/
+      datagen/generate.py
+      rollout.py
+      generate_dining_cleanup_object_poses.py
+      visualize_dining_cleanup_layout.py
+    model_links.txt
+```
+
+`README.txt` should be copied to the submission root. This Markdown file can be
+included as supplementary implementation documentation. The Dining Cleanup FSM
+is included under `Supplementary/packages/...` because it is required for
+scripted datagen reproducibility, while `Configurations/` is kept focused on the
+standalone environment config and its import dependencies.
+
+The `Configurations/configs/dining_cleanup/` directory should remain inside the
+Configurations folder because those JSON files define the three claimed
+evaluation variants: fixed spoon yaw, random spoon yaw, and the fork/bowl2 asset
+shift. Each config selects the task id, object USD assets, scales, and default
+pose split. They are part of the benchmark configuration, not just supporting
+notes.
+
+The `Configurations/data/dining_clean/` directory should also remain inside the
+Configurations folder because the config JSON files reference those deterministic
+pose splits with repo-root-relative paths, for example:
+
+```json
+"object_poses": "data/dining_clean/dining_cleanup_spoon_random_yaw_200.json"
+```
+
+These pose splits are required to reproduce the exact initial bowl/spoon layouts
+used by datagen and rollout evaluation. Keeping them next to the configs makes
+the configuration package self-contained and avoids broken relative paths during
+evaluation. They can be documented in Supplementary, but they should not be moved
+only to Supplementary unless all config and command paths are changed as well.
+
+## Benchmarking Integrity Notes
+
+- The task is reproducible from the standalone env config and Gym registration.
+- The object pose splits used for evaluation are explicit JSON files.
+- Asset-shift evaluation is controlled through config JSON files, not hidden code changes.
+- No manual intervention is required during rollout.
+- Videos and logs are generated locally and are not automatically uploaded to Hugging Face.
+- If using Hugging Face checkpoints, the exact repository and checkpoint path should be stated in `README.txt`.
+
+## Related Documentation
+
+| Document | Purpose |
+|---|---|
+| `docs/standalone_env_config_export.md` | Advanced standalone config export requirement |
+| `docs/dining_cleanup/evaluation_configs.md` | Three Dining Cleanup evaluation configs |
+| `docs/dining_cleanup/dataset_generation.md` | Object pose generation and datagen details |
+| `docs/lerobot_rollout.md` | General LeRobot rollout flow |

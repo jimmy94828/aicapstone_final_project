@@ -224,7 +224,7 @@ def plot_layout(points: dict[str, list[tuple[float, float]]], output: Path) -> N
 
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(output)
+    fig.savefig(output, bbox_inches="tight", pad_inches=0.12)
     plt.close(fig)
 
 

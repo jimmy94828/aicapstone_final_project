@@ -320,7 +320,7 @@ class DiningCleanupStateMachine(StateMachineBase):
         env.scene.update(dt=env.physics_dt)
         self._rest_ee_pos_w = self._ee_pos_w(robot).clone()
 
-        # ── Wipe-coverage visualization mesh ──────────────────────────────
+        # Wipe-coverage visualization mesh.
         
         stage = env.sim.stage
         x_bins = max(1, math.ceil((_LEFT_TABLE_X_RANGE[1] - _LEFT_TABLE_X_RANGE[0]) / _WIPE_COVERAGE_RESOLUTION))
@@ -564,7 +564,7 @@ class DiningCleanupStateMachine(StateMachineBase):
         num_envs,
         device,
     ):
-        # 放叉子前轉正
+        # Align the utensil before dropping it.
         if (
             obj_name == _SPOON_NAME
             and event.kind in ("move_above_drop", "lower_to_release")
@@ -578,7 +578,7 @@ class DiningCleanupStateMachine(StateMachineBase):
 
             pitch = torch.zeros_like(roll)
 
-            # 朝世界 +X
+            # Face world +X.
             yaw = torch.zeros_like(roll)
 
             return quat_from_euler_xyz(
@@ -657,7 +657,7 @@ class DiningCleanupStateMachine(StateMachineBase):
             return
 
         state = self._wipe_covered[env_idx].float()   # (x_bins, y_bins)
-        # heatmap: 0=dirty(blue) → 1=clean(red-green peak)
+        # heatmap: 0=dirty(blue) -> 1=clean(red-green peak)
         c = state.cpu()
         colors = []
         for i in range(c.shape[0]):

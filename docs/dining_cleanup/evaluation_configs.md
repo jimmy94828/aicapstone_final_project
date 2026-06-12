@@ -89,7 +89,7 @@ Fixed Spoon Yaw:
 
 ```bash
 python scripts/rollout.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
   --dining_cleanup_config configs/dining_cleanup/spoon_fixed_yaw.json \
   --policy_type=lerobot-<policy_name> \
   --policy_checkpoint_path=<path/to/checkpoint> \
@@ -105,7 +105,7 @@ Random Spoon Yaw:
 
 ```bash
 python scripts/rollout.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
   --dining_cleanup_config configs/dining_cleanup/spoon_random_yaw.json \
   --policy_type=lerobot-<policy_name> \
   --policy_checkpoint_path=<path/to/checkpoint> \
@@ -121,7 +121,7 @@ Fork + Bowl2 Scaled:
 
 ```bash
 python scripts/rollout.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
   --dining_cleanup_config configs/dining_cleanup/fork_bowl2_scaled.json \
   --policy_type=lerobot-<policy_name> \
   --policy_checkpoint_path=<path/to/checkpoint> \
@@ -146,7 +146,7 @@ Fixed Spoon Yaw:
 
 ```bash
 python scripts/datagen/generate.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
   --dining_cleanup_config configs/dining_cleanup/spoon_fixed_yaw.json \
   --num_envs 1 \
   --device cuda \
@@ -159,7 +159,7 @@ Random Spoon Yaw:
 
 ```bash
 python scripts/datagen/generate.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
   --dining_cleanup_config configs/dining_cleanup/spoon_random_yaw.json \
   --num_envs 1 \
   --device cuda \
@@ -172,7 +172,7 @@ Fork + Bowl2 Scaled:
 
 ```bash
 python scripts/datagen/generate.py \
-  --task HCIS-DiningCleanup-SingleArm-v0 \
+  --task LeIsaac-HCIS-DiningCleanup-SingleArm-v0 \
   --dining_cleanup_config configs/dining_cleanup/fork_bowl2_scaled.json \
   --num_envs 1 \
   --device cuda \

@@ -97,6 +97,7 @@ TASK_REGISTRY = {
     "HCIS-CupStacking-SingleArm-v0": (CupStackingStateMachine, "keyboard"),
     "HCIS-ToyBlocksCollection-SingleArm-v0": (ToyBlocksCollectionStateMachine, "keyboard"),
     "HCIS-CutleryArrangement-SingleArm-v0": (CutleryArrangementStateMachine, "keyboard"),
+    "LeIsaac-HCIS-DiningCleanup-SingleArm-v0": (DiningCleanupStateMachine, "keyboard"),
     "HCIS-DiningCleanup-SingleArm-v0": (DiningCleanupStateMachine, "keyboard"),
 }
 
