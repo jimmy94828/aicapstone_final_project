@@ -119,6 +119,24 @@ Rollout loads your trained policy into the Isaac Lab simulator (inside the Docke
 
 See [LeRobot Rollout (Policy Evaluation)](docs/lerobot_rollout.md) for the full procedure.
 
+## Advanced Dining Cleanup
+
+The Advanced-level Dining Cleanup task is documented separately:
+
+- [Dining Cleanup implementation guide](docs/dining_cleanup/README.md)
+- [Dining Cleanup evaluation configs](docs/dining_cleanup/evaluation_configs.md)
+- [Dining Cleanup dataset generation](docs/dining_cleanup/dataset_generation.md)
+
+The submission-ready Advanced package can be staged under:
+
+```text
+submission/dining_cleanup_advanced/
+```
+
+The staged submission folder should include a `README.txt` with the complete
+execution and reproduction guide required by the course submission spec. The
+source copy of that guide is maintained at `docs/dining_cleanup/README.txt`.
+
 ## Documentation
 
 | Document | Description |
@@ -133,6 +151,9 @@ See [LeRobot Rollout (Policy Evaluation)](docs/lerobot_rollout.md) for the full 
 | [Standalone Env Config Export](docs/standalone_env_config_export.md) | Exporting environment configs as standalone files |
 | [Synthetic Data Generation Pipeline](docs/synthetic_data_generation.md) | Generating synthetic training data |
 | [UMI Pipeline](docs/umi_pipeline.md) | Data collection and processing with UMI |
+| [Dining Cleanup Implementation Guide](docs/dining_cleanup/README.md) | Advanced Dining Cleanup task design and reproduction guide |
+| [Dining Cleanup Evaluation Configs](docs/dining_cleanup/evaluation_configs.md) | Fixed-yaw, random-yaw, and asset-shift evaluation configs |
+| [Dining Cleanup Dataset Generation](docs/dining_cleanup/dataset_generation.md) | Object-pose split generation and layout visualization |
 
 ## License
 
