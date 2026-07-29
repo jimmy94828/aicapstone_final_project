@@ -8,12 +8,12 @@ and simulation rollout evaluation.
 
 | Member | Responsibilities | Contributions |
 |---|---|---:|
-| 陳詩諺 112550004 | Advanced idea, FSM tuning, Advanced scene design, report writing, VLA research and training, project management | 18 |
-| 謝嘉宸 112550019 | Advanced idea design, data generation, policy training (all policies and levels), rollout (all policies and levels), report writing, slide creation, and presentation recording | 18 |
-| 徐瑋晨 112550047 | Object-pose analysis, Advanced scene configuration design, Advanced idea and proposal, Advanced FSM design, Advanced-level rollout and evaluation design, report, and submission documents | 18 |
-| 蔡烝旭 112550099 | Data collection, small-case data generation, ACT and Diffusion Policy training, ACT and Diffusion Policy rollout, report, and slide design | 18 |
-| 游翔宇 112550103 | Data collection, Advanced idea proposal, presentation slide draft, and environment setup | 10 |
-| 孫傅康 112550176 | Human demonstration data processing, FSM data generation, FSM tuning, Entry-level ACT policy training, and rollout | 18 |
+| 陳詩諺 112550004 | Advanced idea, FSM tuning, Advanced scene design, report writing, VLA research and training, project management | 18% |
+| 謝嘉宸 112550019 | Advanced idea design, data generation, policy training (all policies and levels), rollout (all policies and levels), report writing, slide creation, and presentation recording | 18% |
+| 徐瑋晨 112550047 | Object-pose analysis, Advanced scene configuration design, Advanced idea and proposal, Advanced FSM design, Advanced-level rollout and evaluation design, report, and submission documents | 18% |
+| 蔡烝旭 112550099 | Data collection, small-case data generation, ACT and Diffusion Policy training, ACT and Diffusion Policy rollout, report, and slide design | 18% |
+| 游翔宇 112550103 | Data collection, Advanced idea proposal, presentation slide draft, and environment setup | 10% |
+| 孫傅康 112550176 | Human demonstration data processing, FSM data generation, FSM tuning, Entry-level ACT policy training, and rollout | 18% |
 
 The project studies two levels of robot manipulation:
 
